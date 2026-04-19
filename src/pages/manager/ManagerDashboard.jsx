@@ -108,6 +108,7 @@ const ManagerDashboard = () => {
   const [workers, setWorkers] = useState([]);
   const [workerStats, setWorkerStats] = useState({ total: 0, active: 0, averageEfficiency: 0 });
   const [showPostLoadModal, setShowPostLoadModal] = useState(false);
+  const [isPostingLoad, setIsPostingLoad] = useState(false);
   const [postLoadForm, setPostLoadForm] = useState({
     fromLocation: '',
     toLocation: '',
@@ -495,8 +496,19 @@ const ManagerDashboard = () => {
 
   const handlePostLoad = async (e) => {
     e.preventDefault();
+    if (isPostingLoad) return;
+    
+    setIsPostingLoad(true);
+    console.log('[MARKETPLACE] Posting load:', postLoadForm);
+
     try {
       const token = getToken();
+      if (!token) {
+        showToast('Authentication session expired. Please login again.', 'error');
+        handleAuthError();
+        return;
+      }
+
       const res = await fetch('/api/freight/loads', {
         method: 'POST',
         headers: { 
@@ -508,9 +520,13 @@ const ManagerDashboard = () => {
           warehouseId: user?.warehouseId
         })
       });
+
+      console.log('[MARKETPLACE] Response status:', res.status);
       const data = await res.json();
+      console.log('[MARKETPLACE] Response data:', data);
+
       if (data.success) {
-        showToast('Load posted to marketplace!', 'success');
+        showToast('Load successfully broadcasted to marketplace!', 'success');
         setShowPostLoadModal(false);
         setMarketplaceLoads(prev => [data.data, ...prev]);
         setPostLoadForm({
@@ -518,10 +534,13 @@ const ManagerDashboard = () => {
           weightTonnes: '', ratePerKm: '', pickupDateTime: '', notes: ''
         });
       } else {
-        showToast(data.message || 'Posting failed', 'error');
+        showToast(data.message || 'Failed to post load', 'error');
       }
     } catch (err) {
-      showToast('Server error', 'error');
+      console.error('[MARKETPLACE] Error:', err);
+      showToast('Connection error. Please check your internet.', 'error');
+    } finally {
+      setIsPostingLoad(false);
     }
   };
 
@@ -2396,8 +2415,19 @@ const ManagerDashboard = () => {
                   </div>
                </div>
 
-               <button type="submit" className="w-full bg-[#F59E0B] hover:bg-[#D97706] text-black font-black py-4 rounded-lg text-xs uppercase tracking-[0.2em] shadow-xl shadow-[#F59E0B]/10 active:scale-95 transition-all">
-                  Broadcast to Marketplace
+               <button 
+                  type="submit" 
+                  disabled={isPostingLoad}
+                  className="w-full bg-[#F59E0B] hover:bg-[#D97706] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-lg text-xs uppercase tracking-[0.2em] shadow-xl shadow-[#F59E0B]/10 active:scale-95 transition-all flex items-center justify-center gap-2"
+               >
+                  {isPostingLoad ? (
+                    <>
+                      <RefreshCcw size={16} className="animate-spin" />
+                      BROADCASTING...
+                    </>
+                  ) : (
+                    "Broadcast to Marketplace"
+                  )}
                </button>
             </form>
           </div>
