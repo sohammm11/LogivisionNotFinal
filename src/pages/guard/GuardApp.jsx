@@ -220,16 +220,36 @@ const ScanTab = () => {
     }
   };
 
-  const handleScanPlate = () => plateInputRef.current?.click();
+  const handleScanPlate = () => {
+    const input = plateInputRef.current;
+    if (input) {
+      input.value = '';
+      input.click();
+    }
+  };
   const handleScanChallan = () => {
     setShowChallanPreview(false);
-    challanInputRef.current?.click();
+    const input = challanInputRef.current;
+    if (input) {
+      input.value = '';
+      input.click();
+    }
   };
   const handleGalleryChallan = () => {
     setShowChallanPreview(false);
-    galleryChallanInputRef.current?.click();
+    const input = galleryChallanInputRef.current;
+    if (input) {
+      input.value = '';
+      input.click();
+    }
   };
-  const handleScanLoad = () => loadInputRef.current?.click();
+  const handleScanLoad = () => {
+    const input = loadInputRef.current;
+    if (input) {
+      input.value = '';
+      input.click();
+    }
+  };
 
   const handlePlateFileSelect = (event) => {
     const file = event.target.files[0];
@@ -859,92 +879,102 @@ const ScanTab = () => {
       <div className="flex-1 overflow-y-auto pb-6 pt-6">
         <div className="px-5 space-y-8">
           
-          {/* Main Viewfinder */}
+          <input type='file' accept='image/*' capture='environment' ref={plateInputRef} style={{display:'none'}} onChange={handlePlateFileSelect} />
+          <input type='file' accept='image/*' capture='environment' ref={challanInputRef} style={{display:'none'}} onChange={handleChallanFileSelect} />
+          <input type='file' accept='image/*' ref={galleryChallanInputRef} style={{display:'none'}} onChange={handleChallanFileSelect} />
+          <input type='file' accept='image/*' capture='environment' ref={loadInputRef} style={{display:'none'}} onChange={handleLoadPhotoSelect} />
+
+          {/* Main Viewfinder / Direct Trigger */}
           <div className="relative">
-            <div className="bg-industrial-gradient border border-[#1E2D45] rounded-[28px] overflow-hidden shadow-2xl relative p-2 shadow-amber-glow">
-              <div className="relative aspect-[4/3] rounded-[20px] overflow-hidden bg-black flex items-center justify-center border border-[#FFFFFF08]">
-                
-                {/* Visual Corner Brackets */}
-                <div className="corner-bracket bracket-tl"></div>
-                <div className="corner-bracket bracket-tr"></div>
-                <div className="corner-bracket bracket-bl"></div>
-                <div className="corner-bracket bracket-br"></div>
+            { (plateImage || challanImage || loadPhoto) ? (
+              <div className="bg-industrial-gradient border border-[#1E2D45] rounded-[28px] overflow-hidden shadow-2xl relative p-2 shadow-amber-glow">
+                <div className="relative aspect-[4/3] rounded-[20px] overflow-hidden bg-black flex items-center justify-center border border-[#FFFFFF08]">
+                  
+                  {/* Visual Corner Brackets */}
+                  <div className="corner-bracket bracket-tl"></div>
+                  <div className="corner-bracket bracket-tr"></div>
+                  <div className="corner-bracket bracket-bl"></div>
+                  <div className="corner-bracket bracket-br"></div>
 
-                <input ref={plateInputRef} type="file" accept="image/*" capture="environment" onChange={handlePlateFileSelect} className="hidden" />
-                <input ref={challanInputRef} type="file" accept="image/*" capture="environment" onChange={handleChallanFileSelect} className="hidden" />
-                <input ref={galleryChallanInputRef} type="file" accept="image/*" onChange={handleChallanFileSelect} className="hidden" />
-                <input ref={loadInputRef} type="file" accept="image/*" capture="environment" onChange={handleLoadPhotoSelect} className="hidden" />
+                  <div className="w-full h-full relative">
+                    {plateImage && scanTarget === 'PLATE' ? (
+                      <img src={plateImage} className="w-full h-full object-cover" alt="Plate" />
+                    ) : challanImage && scanTarget === 'CHALLAN' ? (
+                      <img src={challanImage} className="w-full h-full object-cover opacity-60 backdrop-sepia-[0.2]" alt="Challan" />
+                    ) : loadPhoto ? (
+                      <img src={loadPhoto} className="w-full h-full object-cover" alt="Load Evidence" />
+                    ) : null}
 
-                <div className="w-full h-full relative">
-                  {plateImage && scanTarget === 'PLATE' ? (
-                    <img src={plateImage} className="w-full h-full object-cover" alt="Plate" />
-                  ) : challanImage && scanTarget === 'CHALLAN' ? (
-                    <img src={challanImage} className="w-full h-full object-cover opacity-60 backdrop-sepia-[0.2]" alt="Challan" />
-                  ) : loadPhoto ? (
-                    <img src={loadPhoto} className="w-full h-full object-cover" alt="Load Evidence" />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-3">
-                      <div className="w-16 h-16 rounded-full bg-[#1A2235]/50 border border-[#1E2D45] flex items-center justify-center text-[#3D4F6B]">
-                        <Camera size={32} />
+                    {/* Laser Scan Animation */}
+                    {scanAnim === 'PARSING' && (
+                      <div className="absolute left-0 right-0 h-[2px] bg-[#F59E0B] shadow-[0_0_15px_#F59E0B] z-50 animate-scan"></div>
+                    )}
+
+                    {/* Processing HUD */}
+                    {scanAnim === 'PARSING' && (
+                      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-[60]">
+                        <div className="flex flex-col items-center gap-3">
+                          <div className="w-10 h-10 border-2 border-[#F59E0B] border-t-transparent rounded-full animate-spin"></div>
+                          <div className="text-[#F59E0B] text-[10px] font-black tracking-widest uppercase animate-pulse font-mono">NEURAL_OCR_ACTIVE</div>
+                        </div>
                       </div>
-                      <div className="text-[10px] text-[#6B7FA8] font-black uppercase tracking-[0.2em]">Ready for sensor input</div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Laser Scan Animation */}
-                  {scanAnim === 'PARSING' && (
-                    <div className="absolute left-0 right-0 h-[2px] bg-[#F59E0B] shadow-[0_0_15px_#F59E0B] z-50 animate-scan"></div>
-                  )}
-
-                  {/* Processing HUD */}
-                  {scanAnim === 'PARSING' && (
-                    <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-[60]">
-                      <div className="flex flex-col items-center gap-3">
-                        <div className="w-10 h-10 border-2 border-[#F59E0B] border-t-transparent rounded-full animate-spin"></div>
-                        <div className="text-[#F59E0B] text-[10px] font-black tracking-widest uppercase animate-pulse font-mono">NEURAL_OCR_ACTIVE</div>
+                    {/* Plate Scan Switcher */}
+                    <button 
+                      onClick={handleScanPlate}
+                      className={`absolute top-4 right-4 p-2.5 rounded-xl border-2 backdrop-blur-xl transition-all z-[80] ${
+                        plateDone ? 'bg-[#0DD9B0]/20 border-[#0DD9B0] text-[#0DD9B0]' : 'bg-black/60 border-white/10 text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Camera size={14} className={plateDone ? 'animate-pulse' : ''} />
+                        <span className="text-[10px] font-black tracking-widest uppercase">{plateDone ? 'PLATE LOCKED' : 'PLATE SCAN'}</span>
                       </div>
-                    </div>
-                  )}
+                    </button>
 
-                  {/* Plate Scan Switcher */}
-                  <button 
-                    onClick={handleScanPlate}
-                    className={`absolute top-4 right-4 p-2.5 rounded-xl border-2 backdrop-blur-xl transition-all z-[80] ${
-                      plateDone ? 'bg-[#0DD9B0]/20 border-[#0DD9B0] text-[#0DD9B0]' : 'bg-black/60 border-white/10 text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                       <Camera size={14} className={plateDone ? 'animate-pulse' : ''} />
-                       <span className="text-[10px] font-black tracking-widest uppercase">{plateDone ? 'PLATE LOCKED' : 'PLATE SCAN'}</span>
-                    </div>
-                  </button>
+                    {/* Mismatch Indicators */}
+                    {mismatchCount > 0 && (
+                      <div className="absolute bottom-4 left-4 flex gap-1.5 p-2 bg-black/40 backdrop-blur-md rounded-lg border border-white/10 z-[80]">
+                        {[...Array(4)].map((_, i) => (
+                          <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < mismatchCount ? 'bg-[#F43F5E] shadow-[0_0_5px_#F43F5E]' : 'bg-white/10'}`}></div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                  {/* Mismatch Indicators */}
-                  {mismatchCount > 0 && (
-                    <div className="absolute bottom-4 left-4 flex gap-1.5 p-2 bg-black/40 backdrop-blur-md rounded-lg border border-white/10 z-[80]">
-                       {[...Array(4)].map((_, i) => (
-                         <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < mismatchCount ? 'bg-[#F43F5E] shadow-[0_0_5px_#F43F5E]' : 'bg-white/10'}`}></div>
-                       ))}
+                  {/* Challan Preview Decision Hub */}
+                  {showChallanPreview && challanImage && (
+                    <div className="absolute inset-0 bg-[#080C14]/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 z-[120] animate-fade-in">
+                      <div className="w-16 h-16 rounded-full bg-[#F59E0B]/10 flex items-center justify-center mb-6">
+                        <FileText size={32} className="text-[#F59E0B]" />
+                      </div>
+                      <div className="text-white font-black text-sm uppercase tracking-widest text-center mb-1">Verify Quality</div>
+                      <div className="text-[#6B7FA8] text-[10px] uppercase font-bold tracking-wider mb-8 text-center px-4">Ensure optical clarity for neural extraction</div>
+                      <div className="flex flex-col gap-3 w-full">
+                        <button onClick={processChallanOCR} className="w-full bg-[#F59E0B] text-black font-black py-4 rounded-xl shadow-lg shadow-[#F59E0B]/20 uppercase text-xs tracking-widest">PROCEED TO AI</button>
+                        <button onClick={() => { setShowChallanPreview(false); setChallanImage(null); }} className="w-full border border-[#1E2D45] text-[#6B7FA8] font-black py-3.5 rounded-xl text-[10px] uppercase">Discard & Retake</button>
+                      </div>
                     </div>
                   )}
                 </div>
-
-                {/* Challan Preview Decision Hub */}
-                {showChallanPreview && challanImage && (
-                  <div className="absolute inset-0 bg-[#080C14]/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 z-[120] animate-fade-in">
-                    <div className="w-16 h-16 rounded-full bg-[#F59E0B]/10 flex items-center justify-center mb-6">
-                       <FileText size={32} className="text-[#F59E0B]" />
-                    </div>
-                    <div className="text-white font-black text-sm uppercase tracking-widest text-center mb-1">Verify Quality</div>
-                    <div className="text-[#6B7FA8] text-[10px] uppercase font-bold tracking-wider mb-8 text-center px-4">Ensure optical clarity for neural extraction</div>
-                    <div className="flex flex-col gap-3 w-full">
-                      <button onClick={processChallanOCR} className="w-full bg-[#F59E0B] text-black font-black py-4 rounded-xl shadow-lg shadow-[#F59E0B]/20 uppercase text-xs tracking-widest">PROCEED TO AI</button>
-                      <button onClick={() => { setShowChallanPreview(false); setChallanImage(null); }} className="w-full border border-[#1E2D45] text-[#6B7FA8] font-black py-3.5 rounded-xl text-[10px] uppercase">Discard & Retake</button>
-                    </div>
-                  </div>
-                )}
               </div>
-            </div>
+            ) : (
+                <button 
+                  onClick={handleScanChallan} 
+                  disabled={scanAnim === 'PARSING'}
+                  className="w-full bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black h-32 rounded-[32px] flex items-center justify-center gap-4 shadow-2xl shadow-amber-900/40 active:scale-95 transition-all transform hover:-translate-y-1"
+                >
+                  <div className="bg-black/10 p-3.5 rounded-2xl">
+                    <Scan size={36} className="stroke-[2.5]" />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[12px] font-black uppercase opacity-60 leading-none mb-1">Optical Neural Scan</div>
+                    <div className="text-xl font-black tracking-widest uppercase leading-none">Tap to Scan Challan</div>
+                    <div className="text-[9px] font-bold uppercase mt-2 text-black/40">Secure Gate Entry v2.0</div>
+                  </div>
+                </button>
+            )}
           </div>
 
           {/* AI Extraction Summary Card (Auto-appears after scan) */}
@@ -1025,33 +1055,25 @@ const ScanTab = () => {
 
           {/* Primary Scanner Action */}
           <div className="flex flex-col items-center gap-5">
-            {mismatchCount < 4 ? (
-              <button 
-                onClick={handleScanChallan} 
-                disabled={scanAnim === 'PARSING'}
-                className="w-[90%] bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black h-20 rounded-[24px] flex items-center justify-center gap-4 shadow-2xl shadow-amber-900/40 active:scale-95 transition-all transform hover:-translate-y-1"
-              >
-                <div className="bg-black/10 p-2.5 rounded-xl">
-                   <Scan size={28} className="stroke-[2.5]" />
-                </div>
-                <div className="text-left">
-                   <div className="text-[10px] font-black uppercase opacity-60 leading-none mb-1">Optical Scan</div>
-                   <div className="text-base font-black tracking-widest uppercase leading-none">Scan Challan</div>
-                </div>
-              </button>
-            ) : (
-              <button 
-                onClick={handleFlag}
-                className="w-[90%] bg-[#F43F5E] text-white h-20 rounded-[24px] flex items-center justify-center gap-4 shadow-2xl shadow-red-900/20 active:scale-95 transition-all"
-              >
-                <div className="bg-white/10 p-2.5 rounded-xl">
-                   <AlertOctagon size={28} className="stroke-[2.5]" />
-                </div>
-                <div className="text-left">
-                   <div className="text-[10px] font-black uppercase opacity-60 leading-none mb-1">SCANNER LOCKED</div>
-                   <div className="text-base font-black tracking-widest uppercase leading-none">MANAGER OVERRIDE</div>
-                </div>
-              </button>
+            { (plateImage || challanImage || loadPhoto) && (
+              mismatchCount < 4 ? (
+                <button 
+                  onClick={handleScanChallan} 
+                  disabled={scanAnim === 'PARSING'}
+                  className="w-full bg-[#111827] border border-[#1E2D45] text-white h-16 rounded-2xl flex items-center justify-center gap-3 active:scale-95 transition-all"
+                >
+                  <Camera size={20} className="text-[#F59E0B]" />
+                  <span className="text-[11px] font-black uppercase tracking-widest">Retake / Scan More</span>
+                </button>
+              ) : (
+                <button 
+                  onClick={handleFlag}
+                  className="w-full bg-[#F43F5E] text-white h-16 rounded-2xl flex items-center justify-center gap-3 active:scale-95 transition-all"
+                >
+                  <AlertOctagon size={20} />
+                  <span className="text-[11px] font-black uppercase tracking-widest">MANAGER OVERRIDE</span>
+                </button>
+              )
             )}
             
             {showEchallanInput && (
