@@ -6,8 +6,8 @@ const { asyncHandler, AppError, validationError } = require('../middleware/error
 
 const router = express.Router();
 
-// Get all inventory items for warehouse (WAREHOUSE_MANAGER/ADMIN only)
-router.get('/', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN'), asyncHandler(async (req, res) => {
+// Get inventory items — DRIVERs only see marketplace-visible items
+router.get('/', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN', 'DRIVER'), asyncHandler(async (req, res) => {
   const { 
     warehouseId, 
     page = 1, 
@@ -43,6 +43,11 @@ router.get('/', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN'), async
       { sku: { $regex: search, $options: 'i' } },
       { binLocation: { $regex: search, $options: 'i' } }
     ];
+  }
+
+  // Drivers only see marketplace-visible stock
+  if (req.user.role === 'DRIVER') {
+    query.marketplaceVisible = { $ne: false };
   }
 
   // Build sort object
@@ -341,10 +346,22 @@ router.post('/:id/add-stock', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', '
 
   // Emit stock added event
   req.io.emit('stock:added', {
-    inventoryItem: inventoryItem,
-    quantity: quantity,
+    inventoryItem,
+    quantity,
     reference: reference || `Manual addition by ${req.user.name}`,
     addedBy: req.user.toPublicJSON(),
+    warehouseId: inventoryItem.warehouseId,
+    timestamp: new Date()
+  });
+
+  // 📡 inventory_update — push live stock level to Driver Marketplace
+  req.io.emit('inventory_update', {
+    inventoryId: inventoryItem._id,
+    sku: inventoryItem.sku,
+    name: inventoryItem.name,
+    available: inventoryItem.getAvailableQuantity(),
+    status: inventoryItem.status,
+    marketplaceVisible: inventoryItem.marketplaceVisible,
     warehouseId: inventoryItem.warehouseId,
     timestamp: new Date()
   });
@@ -413,10 +430,22 @@ router.post('/:id/remove-stock', verifyToken, authorizeRoles('WAREHOUSE_MANAGER'
 
     // Emit stock removed event
     req.io.emit('stock:removed', {
-      inventoryItem: inventoryItem,
-      quantity: quantity,
+      inventoryItem,
+      quantity,
       reference: reference || `Manual removal by ${req.user.name}`,
       removedBy: req.user.toPublicJSON(),
+      warehouseId: inventoryItem.warehouseId,
+      timestamp: new Date()
+    });
+
+    // 📡 inventory_update — may disable Book buttons for drivers
+    req.io.emit('inventory_update', {
+      inventoryId: inventoryItem._id,
+      sku: inventoryItem.sku,
+      name: inventoryItem.name,
+      available: inventoryItem.getAvailableQuantity(),
+      status: inventoryItem.status,
+      marketplaceVisible: inventoryItem.marketplaceVisible,
       warehouseId: inventoryItem.warehouseId,
       timestamp: new Date()
     });
@@ -636,9 +665,41 @@ router.get('/expiring/warehouse', verifyToken, authorizeRoles('WAREHOUSE_MANAGER
   res.json({
     success: true,
     message: 'Expiring items retrieved successfully',
-    data: {
-      expiringItems
-    }
+    data: { expiringItems }
+  });
+}));
+
+// Toggle marketplace visibility (WAREHOUSE_MANAGER/ADMIN only)
+router.patch('/:id/marketplace-visibility', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN'), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { marketplaceVisible } = req.body;
+
+  const inventoryItem = await InventoryItem.findById(id);
+  if (!inventoryItem) throw new AppError('Inventory item not found', 404);
+
+  if (req.user.role !== 'ADMIN' && req.user.warehouseId !== inventoryItem.warehouseId) {
+    throw new AppError('Access denied.', 403);
+  }
+
+  inventoryItem.marketplaceVisible = !!marketplaceVisible;
+  await inventoryItem.save();
+
+  // 📡 Broadcast visibility change — drivers fade out / restore card
+  req.io.emit('inventory_update', {
+    inventoryId: inventoryItem._id,
+    sku: inventoryItem.sku,
+    name: inventoryItem.name,
+    available: inventoryItem.getAvailableQuantity(),
+    status: inventoryItem.status,
+    marketplaceVisible: inventoryItem.marketplaceVisible,
+    warehouseId: inventoryItem.warehouseId,
+    timestamp: new Date()
+  });
+
+  res.json({
+    success: true,
+    message: `Marketplace visibility set to ${inventoryItem.marketplaceVisible}`,
+    data: { inventoryItem }
   });
 }));
 

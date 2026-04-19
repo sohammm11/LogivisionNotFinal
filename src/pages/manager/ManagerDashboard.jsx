@@ -4,7 +4,7 @@ import StatusPill from '../../components/ui/StatusPill';
 import { useToast } from '../../context/ToastContext';
 import { useSocket } from '../../services/SocketProvider';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Plus, MapPin, Truck, Package, AlertTriangle, Users, Check, X, RefreshCcw, ShieldCheck, Maximize } from 'lucide-react';
+import { Search, Plus, MapPin, Truck, Package, AlertTriangle, Users, Check, X, RefreshCcw, ShieldCheck, Maximize, FileText } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 
@@ -63,27 +63,33 @@ const ManagerDashboard = () => {
     window.location.href = '/login';
   };
   const [activeTab, setActiveTab] = useState('INVENTORY');
+  const [showExplainer, setShowExplainer] = useState(!localStorage.getItem('seen_explainer'));
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(null); // stores the id of entry being updated
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [newItemForm, setNewItemForm] = useState({
+    sku: '', category: 'ELECTRONICS', name: '', currentQty: '', unit: 'pcs', binLocation: ''
+  });
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedTruck, setSelectedTruck] = useState(null);
   const [bookingForm, setBookingForm] = useState({
     cargoDescription: '',
+    notes: '',
     weightKg: '',
+    inventoryId: '',     // Added for Zero-Overbooking
+    requiredStock: '',   // Added for Zero-Overbooking 
     pickupAddress: {
-      street: '',
-      city: '',
-      state: '',
-      pincode: ''
+      street: 'Chakan MIDC Gate 1',
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '410206'
     },
     deliveryAddress: {
       street: '',
-      city: '',
-      state: '',
+      city: 'Pune',
+      state: 'Maharashtra',
       pincode: ''
-    },
-    notes: ''
+    }
   });
   const [radius, setRadius] = useState('10 km');
   const [selectedVerification, setSelectedVerification] = useState(null);
@@ -96,10 +102,21 @@ const ManagerDashboard = () => {
   const [truckLocations, setTruckLocations] = useState([]);
   const [availableTrucks, setAvailableTrucks] = useState([]);
   const [inventory, setInventory] = useState([]);
-  const [workers, setWorkers] = useState([]);
-  const [workerStats, setWorkerStats] = useState({ total: 0, active: 0, overtime: 0 });
   const [docks, setDocks] = useState([]);
   const [dockStats, setDockStats] = useState({ totalDocks: 0, availableDocks: 0, occupiedDocks: 0 });
+  const [marketplaceLoads, setMarketplaceLoads] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [workerStats, setWorkerStats] = useState({ total: 0, active: 0, averageEfficiency: 0 });
+  const [showPostLoadModal, setShowPostLoadModal] = useState(false);
+  const [postLoadForm, setPostLoadForm] = useState({
+    fromLocation: '',
+    toLocation: '',
+    cargoType: 'Electronics',
+    weightTonnes: '',
+    ratePerKm: '',
+    pickupDateTime: '',
+    notes: ''
+  });
 
   // Fetch initial data
   useEffect(() => {
@@ -122,12 +139,14 @@ const ManagerDashboard = () => {
         const entriesData = await entriesRes.json();
         if (entriesData.success && Array.isArray(entriesData.data)) {
           const seen = new Set();
-          const unique = entriesData.data.filter(e => {
-            const key = String(e.challanId || e._id);
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
+          const unique = entriesData.data
+            .filter(e => e.vendorName !== 'Maruti Suzuki India Ltd' && e.vendorName !== 'Demo Logistics') // Filter out mock data
+            .filter(e => {
+              const key = String(e.challanId || e._id);
+              if (!key || seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
           setPendingEntries(unique);
         }
 
@@ -195,6 +214,11 @@ const ManagerDashboard = () => {
         if (dockStatsData.success) {
           setDockStats(dockStatsData.data);
         }
+
+        // Fetch Marketplace Loads
+        const mres = await fetch('/api/freight/marketplace/loads', { headers });
+        const mdata = await mres.json();
+        if (mdata.success) setMarketplaceLoads(mdata.data);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       }
@@ -335,9 +359,17 @@ const ManagerDashboard = () => {
       fetchDockStats();
     });
 
-    socket.on('booking:completed', (data) => {
-      if (!data?.booking?._id) return;
-      setOutboundOrders(prev => prev.map(o => o._id === data.booking._id ? data.booking : o));
+    socket.on('load:cancelled', (data) => {
+      setMarketplaceLoads(prev => prev.map(l => l._id === data.loadId ? { ...l, status: 'CANCELLED' } : l));
+    });
+
+    socket.on('load:posted', (data) => {
+      setMarketplaceLoads(prev => [data, ...prev]);
+    });
+
+    socket.on('load:accepted', (data) => {
+      setMarketplaceLoads(prev => prev.map(l => l._id === data.loadId ? { ...l, status: 'DRIVER ASSIGNED', driverId: { name: data.driverName } } : l));
+      showToast(`Load ${data.bookingId} accepted by ${data.driverName}`, 'success');
     });
 
     socket.on('challan:location:updated', (data) => {
@@ -461,6 +493,38 @@ const ManagerDashboard = () => {
     setPaymentStep('payment');
   };
 
+  const handlePostLoad = async (e) => {
+    e.preventDefault();
+    try {
+      const token = getToken();
+      const res = await fetch('/api/freight/loads', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({
+          ...postLoadForm,
+          warehouseId: user?.warehouseId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Load posted to marketplace!', 'success');
+        setShowPostLoadModal(false);
+        setMarketplaceLoads(prev => [data.data, ...prev]);
+        setPostLoadForm({
+          fromLocation: '', toLocation: '', cargoType: 'Electronics',
+          weightTonnes: '', ratePerKm: '', pickupDateTime: '', notes: ''
+        });
+      } else {
+        showToast(data.message || 'Posting failed', 'error');
+      }
+    } catch (err) {
+      showToast('Server error', 'error');
+    }
+  };
+
   const handlePayment = async (method) => {
     setPaymentStep('processing');
 
@@ -533,35 +597,37 @@ const ManagerDashboard = () => {
           const verifyData = await verifyRes.json();
 
           if (verifyData.success) {
-            // Proceed to actually book the freight now that payment is verified
-            const bookRes = await fetch('/api/freight/bookings', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-              body: JSON.stringify({
-                truckId: selectedTruck.id,
-                driverId: selectedTruck.driverId,
-                warehouseId: user.warehouseId,
-                cargoDescription: bookingForm.cargoDescription || 'Standard Freight Cargo',
-                notes: bookingForm.notes,
-                weightKg: parseFloat(bookingForm.weightKg) || 1000,
-                distanceKm: parseFloat(distance),
-                pricePerKm: selectedTruck.pricePerKm,
-                pickupAddress: {
-                  street: bookingForm.pickupAddress.street || 'JNPT Panvel Hub',
-                  city: bookingForm.pickupAddress.city || 'Navi Mumbai',
-                  state: bookingForm.pickupAddress.state || 'Maharashtra',
-                  pincode: bookingForm.pickupAddress.pincode || '410206',
-                  coordinates: CITY_COORDINATES[bookingForm.pickupAddress.city] || CITY_COORDINATES['Navi Mumbai']
-                },
-                deliveryAddress: {
-                  street: bookingForm.deliveryAddress.street || 'Market Yard',
-                  city: deliveryCity,
-                  state: bookingForm.deliveryAddress.state || 'Maharashtra',
-                  pincode: bookingForm.deliveryAddress.pincode || '411037',
-                  coordinates: coords
-                }
-              })
-            });
+              // Proceed to actually book the freight now that payment is verified
+              const bookRes = await fetch('/api/freight/bookings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({
+                  truckId: selectedTruck.id,
+                  driverId: selectedTruck.driverId,
+                  warehouseId: user.warehouseId,
+                  inventoryId: bookingForm.inventoryId || null,
+                  requiredStock: bookingForm.requiredStock || bookingForm.weightKg,
+                  cargoDescription: bookingForm.cargoDescription || 'Standard Freight Cargo',
+                  notes: bookingForm.notes,
+                  weightKg: parseFloat(bookingForm.weightKg) || 1000,
+                  distanceKm: parseFloat(distance),
+                  pricePerKm: selectedTruck.pricePerKm,
+                  pickupAddress: {
+                    street: bookingForm.pickupAddress.street || 'Chakan MIDC Gate 1',
+                    city: bookingForm.pickupAddress.city || 'Pune',
+                    state: bookingForm.pickupAddress.state || 'Maharashtra',
+                    pincode: bookingForm.pickupAddress.pincode || '410206',
+                    coordinates: CITY_COORDINATES[bookingForm.pickupAddress.city] || CITY_COORDINATES['Navi Mumbai']
+                  },
+                  deliveryAddress: {
+                    street: bookingForm.deliveryAddress.street || 'Market Yard',
+                    city: deliveryCity,
+                    state: bookingForm.deliveryAddress.state || 'Maharashtra',
+                    pincode: bookingForm.deliveryAddress.pincode || '411037',
+                    coordinates: coords
+                  }
+                })
+              });
             const bookData = await bookRes.json();
 
             if (bookData.success) {
@@ -614,16 +680,38 @@ const ManagerDashboard = () => {
     setShowBookingModal(false);
     setPaymentStep('booking');
     setSelectedTruck(null);
-    setBookingForm({ cargoDescription: '', weightKg: '', pickupLocation: 'JNPT Hub Panvel' });
+    setBookingForm({ cargoDescription: '', weightKg: '', pickupLocation: 'Chakan MIDC Gate 1' });
     setUpiId('');
     setCardDetails({ number: '', expiry: '', cvv: '', name: '' });
     setPaymentTab('upi');
     setTransactionId('');
   };
 
-  const handleSaveItem = () => {
-    setShowAddItemModal(false);
-    showToast('SKU added to inventory!', 'success');
+  const handleSaveItem = async () => {
+    try {
+      const token = getToken();
+      if (!token) { handleAuthError(); return; }
+
+      const res = await fetch('/api/inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          ...newItemForm,
+          currentQty: parseInt(newItemForm.currentQty) || 0,
+          warehouseId: user?.warehouseId || 'CHAKAN-MIDC-01'
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setInventory(prev => [data.data.inventoryItem, ...prev]);
+        setShowAddItemModal(false);
+        setNewItemForm({ sku: '', category: 'ELECTRONICS', name: '', currentQty: '', unit: 'pcs', binLocation: '' });
+        showToast('SKU added with stock!', 'success');
+      } else {
+        showToast(data.message || (data.errors ? data.errors[0].msg : 'Error adding item'), 'error');
+      }
+    } catch (e) { console.error(e); showToast('Server error', 'error'); }
   };
 
   const handleUpdateStatus = async (id, status, notes = '', dock = '') => {
@@ -724,23 +812,66 @@ const ManagerDashboard = () => {
       {/* DARK TAB BAR */}
       <div className="bg-[#0D1421] border-b border-[#1E2D45] sticky top-16 z-[1040]">
         <div className="flex overflow-x-auto hide-scrollbar">
-          {['INVENTORY', 'INBOUND', 'OUTBOUND', 'FREIGHT MARKETPLACE', 'DOCKS', 'WORKFORCE', 'GUARD FEED'].map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={"px-8 py-4 text-sm font-bold tracking-wide transition-all whitespace-nowrap relative " + (activeTab === tab ? 'text-[#F59E0B]' : 'text-[#6B7FA8] hover:text-[#E8F0FE]')}
-            >
-              {tab}
-              {activeTab === tab && (
-                <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#F59E0B]"></div>
-              )}
-            </button>
-          ))}
+          {['INVENTORY', 'INCOMING ARRIVALS', 'OUTGOING DISPATCH', 'INBOUND', 'OUTBOUND', 'DOCKS', 'WORKFORCE'].map((tab) => {
+            const isIncoming = tab === 'INCOMING ARRIVALS';
+            const isOutgoing = tab === 'OUTGOING DISPATCH';
+            const isActive = activeTab === tab;
+            
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-8 py-4 text-xs font-black tracking-[0.15em] transition-all whitespace-nowrap relative flex items-center gap-2 uppercase ${
+                  isActive 
+                    ? (isIncoming ? 'text-[#0DD9B0]' : isOutgoing ? 'text-[#38BDF8]' : 'text-[#F59E0B]') 
+                    : 'text-[#6B7FA8] hover:text-[#E8F0FE]'
+                }`}
+              >
+                {isIncoming && <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-[#0DD9B0]' : 'bg-[#6B7FA8]'}`}></div>}
+                {isOutgoing && <div className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-[#38BDF8]' : 'bg-[#6B7FA8]'}`}></div>}
+                {tab}
+                {isActive && (
+                  <div className={`absolute bottom-0 left-0 right-0 h-[3px] ${
+                    isIncoming ? 'bg-[#0DD9B0]' : isOutgoing ? 'bg-[#38BDF8]' : 'bg-[#F59E0B]'
+                  }`}></div>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* TAB CONTENT */}
       <div className="flex-1 p-6 max-w-[1600px] mx-auto w-full">
+
+        {showExplainer && (
+          <div className="mb-6 bg-gradient-to-r from-[#0D1421] to-[#111827] border border-[#F59E0B]/30 rounded-xl p-6 flex flex-col sm:flex-row items-center justify-between gap-6 shadow-2xl relative overflow-hidden animate-fade-in animate-slide-up">
+            <div className="flex items-start gap-5">
+              <div className="w-12 h-12 rounded-2xl bg-[#F59E0B]/10 flex items-center justify-center text-[#F59E0B] shrink-0 border border-[#F59E0B]/20">
+                <ShieldCheck size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white uppercase tracking-tighter mb-1">Workflow Separation Active</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-[#0DD9B0]"></div>
+                    <span className="text-[11px] text-[#E8F0FE] font-bold"><strong className="text-[#0DD9B0]">INCOMING:</strong> Gate arrivals, E-Way Bill verification, and vibe checks.</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-[#38BDF8]"></div>
+                    <span className="text-[11px] text-[#E8F0FE] font-bold"><strong className="text-[#38BDF8]">OUTGOING:</strong> Freight posting, load dispatch, and EWB assignment.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => { setShowExplainer(false); localStorage.setItem('seen_explainer', 'true'); }}
+              className="px-6 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-black text-white tracking-widest uppercase transition-all"
+            >
+              GOT IT
+            </button>
+          </div>
+        )}
 
         {/* INVENTORY TAB */}
         {activeTab === 'INVENTORY' && (
@@ -792,11 +923,12 @@ const ManagerDashboard = () => {
                   <tr className="text-[#6B7FA8] font-bold tracking-wider text-xs uppercase">
                     <th className="px-6 py-4">SKU</th>
                     <th className="px-6 py-4">ITEM NAME</th>
-                    <th className="px-6 py-4">CATEGORY</th>
                     <th className="px-6 py-4">QTY</th>
                     <th className="px-6 py-4">RESERVED</th>
                     <th className="px-6 py-4">BIN</th>
+                    <th className="px-6 py-4">STOCK BAR</th>
                     <th className="px-6 py-4">STATUS</th>
+                    <th className="px-6 py-4">MARKETPLACE</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E2D45]">
@@ -824,8 +956,62 @@ const ManagerDashboard = () => {
                           <span className="text-xs font-mono-data text-[#E8F0FE]">{item.binLocation || item.bin}</span>
                         </div>
                       </td>
+                      {/* Allocated vs Available Progress Bar */}
+                      <td className="px-6 py-4 min-w-[140px]">
+                        {(() => {
+                          const total = item.currentQty || 0;
+                          const allocated = item.allocatedQty || 0;
+                          const reserved = item.reservedQty || 0;
+                          const available = Math.max(0, total - reserved - allocated);
+                          const allocPct = total > 0 ? Math.min(100, (allocated / total) * 100) : 0;
+                          const resvPct = total > 0 ? Math.min(100, (reserved / total) * 100) : 0;
+                          return (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[9px] font-bold">
+                                <span className="text-[#F59E0B]">Alloc: {allocated}</span>
+                                <span className="text-[#0DD9B0]">Avail: {available}</span>
+                              </div>
+                              <div className="w-full h-2 bg-[#1E2D45] rounded-full overflow-hidden flex">
+                                <div className="h-full bg-[#F43F5E] transition-all" style={{ width: `${resvPct}%` }} title={`Reserved: ${reserved}`} />
+                                <div className="h-full bg-[#F59E0B] transition-all" style={{ width: `${allocPct}%` }} title={`Allocated: ${allocated}`} />
+                              </div>
+                              <div className="flex gap-2 text-[8px] text-[#6B7FA8]">
+                                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E] inline-block"></span>Reserved</span>
+                                <span className="flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] inline-block"></span>Allocated</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className="px-6 py-4">
                         <StatusPill status={item.status.replace('_', ' ')} />
+                      </td>
+                      {/* Marketplace Visibility Toggle */}
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={async () => {
+                            try {
+                              const token = localStorage.getItem('logivision_token');
+                              await fetch(`/api/inventory/${item._id}/marketplace-visibility`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ marketplaceVisible: !item.marketplaceVisible })
+                              });
+                              setInventory(prev => prev.map(it => it._id === item._id ? { ...it, marketplaceVisible: !it.marketplaceVisible } : it));
+                            } catch (e) { console.error(e); }
+                          }}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                            item.marketplaceVisible !== false ? 'bg-[#0DD9B0]' : 'bg-[#3D4F6B]'
+                          }`}
+                          title={item.marketplaceVisible !== false ? 'Visible in Driver Marketplace' : 'Hidden from Drivers'}
+                        >
+                          <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                            item.marketplaceVisible !== false ? 'translate-x-4' : 'translate-x-0.5'
+                          }`} />
+                        </button>
+                        <div className="text-[8px] text-[#6B7FA8] mt-0.5 text-center">
+                          {item.marketplaceVisible !== false ? 'ON' : 'OFF'}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -935,176 +1121,160 @@ const ManagerDashboard = () => {
           </div>
         )}
 
-        {/* FREIGHT MARKETPLACE TAB */}
-        {activeTab === 'FREIGHT MARKETPLACE' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[700px] animate-fade-in">
-            {/* Left: Map */}
-            <div className="bg-[#1A2235] rounded-md border border-[#1E2D45] overflow-hidden relative">
-              <div className="absolute top-4 left-4 z-10 bg-[#080C14] border border-[#1E2D45] px-4 py-2 rounded-lg">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 rounded-full bg-[#0DD9B0] animate-pulse"></div>
-                  <div className="text-xs text-[#6B7FA8] font-bold">Available ({truckLocations.length})</div>
+        {/* OUTGOING DISPATCH TAB (Formerly Freight Marketplace) */}
+        {activeTab === 'OUTGOING DISPATCH' && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Dispatch Top Controls */}
+            <div className="bg-[#0D1421] border border-[#38BDF8]/30 rounded-xl p-6 flex justify-between items-center shadow-2xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[#38BDF8]/5 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-[#38BDF8]/10 transition-all"></div>
+              <div className="flex-1">
+                <h3 className="text-xl font-black text-white uppercase tracking-wider mb-1">Outgoing Dispatch Board</h3>
+                <p className="text-xs text-[#6B7FA8] font-bold">Post loads for external drivers and manage dispatch logistics.</p>
+                <div className="mt-4 flex gap-4">
+                  <a 
+                    href="https://ewaybill.nic.in" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-[10px] font-black text-[#38BDF8] uppercase tracking-widest bg-[#38BDF8]/10 px-4 py-2 rounded-lg border border-[#38BDF8]/20 hover:bg-[#38BDF8]/20 transition-all"
+                  >
+                    <FileText size={14} /> GENERATE E-WAY BILL (GST PORTAL)
+                  </a>
                 </div>
-                <select
-                  value={radius}
-                  onChange={(e) => setRadius(e.target.value)}
-                  className="bg-[#111827] border border-[#1E2D45] text-[#E8F0FE] text-xs px-2 py-1 rounded focus:outline-none focus:ring-1 focus:ring-[#F59E0B]"
-                >
-                  <option>Within 5 km</option>
-                  <option>Within 10 km</option>
-                  <option>Within 25 km</option>
-                  <option>Within 50 km</option>
-                </select>
               </div>
-
-              <div className="h-full min-h-[500px]">
-                <MapContainer
-                  center={[18.9543, 72.9458]}
-                  zoom={11}
-                  className="h-full w-full"
-                  ref={mapRef}
-                >
-                  <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                  />
-
-                  <ChangeView
-                    center={truckLocations.length > 0 ? [truckLocations[0].lat, truckLocations[0].lng] : [18.9543, 72.9458]}
-                    zoom={truckLocations.length > 0 ? 12 : 11}
-                  />
-
-                  {truckLocations.map((truck) => (
-                    <Marker
-                      key={truck.id}
-                      position={[truck.lat, truck.lng]}
-                      icon={createTruckIcon(truck.capacity)}
-                    >
-                      <Popup className="custom-popup">
-                        <div className="bg-[#111827] border border-[#F59E0B] rounded-lg p-3 min-w-[200px]">
-                          <div className="font-bold text-sm mb-2 text-[#E8F0FE] font-mono">{truck.driver}</div>
-                          <div className="text-xs text-[#6B7FA8] mb-1 font-mono">{truck.regNumber}</div>
-                          <div className="text-xs text-[#6B7FA8] mb-2">{truck.type}</div>
-
-                          {truck.cargoPreferences && truck.cargoPreferences.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mb-2">
-                              {truck.cargoPreferences.map(pref => (
-                                <span key={pref} className="text-[9px] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/30 font-bold uppercase">{pref}</span>
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="mb-3">
-                            <div className="flex justify-between text-xs mb-1">
-                              <span className="text-[#6B7FA8]">Available Capacity</span>
-                              <span className="font-mono font-bold text-[#0DD9B0]">{truck.capacity}%</span>
-                            </div>
-                            <div className="w-full bg-[#1E2D45] rounded-full h-1.5">
-                              <div className="bg-[#0DD9B0] h-1.5 rounded-full" style={{ width: truck.capacity + '%' }}></div>
-                            </div>
-                          </div>
-
-                          <div className="text-xs font-mono text-[#F59E0B] mb-3">₹{truck.pricePerKm}/km • {truck.distance}</div>
-
-                          <button
-                            onClick={() => handleBookingRequest(truck)}
-                            className="w-full bg-[#F59E0B] hover:bg-[#D97706] text-black font-bold py-1.5 px-3 rounded text-xs transition-colors"
-                          >
-                            REQUEST BOOKING
-                          </button>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  ))}
-
-                  {/* Trip Preview Layers */}
-                  {showBookingModal && (
-                    <>
-                      {(() => {
-                        const pCity = bookingForm.pickupAddress.city || 'Navi Mumbai';
-                        const dCity = bookingForm.deliveryAddress.city || 'Pune';
-                        const pPosObj = CITY_COORDINATES[pCity] || CITY_COORDINATES['Navi Mumbai'];
-                        const dPosObj = CITY_COORDINATES[dCity] || CITY_COORDINATES['Pune'];
-                        const pPos = [pPosObj.lat, pPosObj.lng];
-                        const dPos = [dPosObj.lat, dPosObj.lng];
-
-                        return (
-                          <>
-                            <Marker position={pPos} icon={L.divIcon({
-                              className: 'pickup-marker',
-                              html: `<div style="width:12px;height:12px;background:#0DD9B0;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px #0DD9B0"></div>`,
-                              iconSize: [12, 12]
-                            })}>
-                              <Popup>Pickup Origin: {pCity}</Popup>
-                            </Marker>
-                            <Marker position={dPos} icon={L.divIcon({
-                              className: 'drop-marker',
-                              html: `<div style="width:12px;height:12px;background:#F59E0B;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px #F59E0B"></div>`,
-                              iconSize: [12, 12]
-                            })}>
-                              <Popup>Delivery Destination: {dCity}</Popup>
-                            </Marker>
-                            <Polyline
-                              positions={[pPos, dPos]}
-                              color="#F59E0B"
-                              dashArray="5, 10"
-                              weight={3}
-                              opacity={0.6}
-                            />
-                          </>
-                        );
-                      })()}
-                    </>
-                  )}
-                </MapContainer>
-              </div>
+              <button 
+                onClick={() => setShowPostLoadModal(true)}
+                className="bg-[#38BDF8] hover:bg-[#0EA5E9] text-black font-black px-6 py-3 rounded-lg flex items-center gap-2 transform active:scale-95 transition-all text-xs tracking-widest shadow-lg shadow-[#38BDF8]/20"
+              >
+                <Plus size={18} /> POST NEW LOAD
+              </button>
             </div>
 
-            {/* Right: Available Trucks */}
-            <div className="flex flex-col h-full bg-[#111827] border border-[#1E2D45] rounded-md p-5 overflow-hidden">
-              <h3 className="font-bold mb-4 text-lg flex items-center gap-2 text-[#E8F0FE]">
-                <Truck size={20} className="text-[#F59E0B]" />
-                Available Drivers Nearby
-              </h3>
-              <div className="space-y-4 overflow-auto pr-1">
-                {truckLocations.map((truck) => (
-                  <div key={truck.id} className="bg-[#0D1421] border border-[#1E2D45] rounded-md p-4 hover:border-[#F59E0B] transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <div className="font-bold text-base text-[#E8F0FE]">{truck.driver}</div>
-                        <div className="text-xs font-mono-data text-[#6B7FA8]">{truck.regNumber} • {truck.type}</div>
-                        {truck.cargoPreferences && truck.cargoPreferences.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {truck.cargoPreferences.map(pref => (
-                              <span key={pref} className="text-[9px] px-1.5 py-0.5 rounded bg-[#0DD9B0]/10 text-[#0DD9B0] border border-[#0DD9B0]/20 font-bold uppercase">{pref}</span>
-                            ))}
+            {/* Active Dispatch Board */}
+            <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden shadow-xl">
+              <div className="p-5 border-b border-[#1E2D45] bg-[#0D1421] flex justify-between items-center">
+                <h4 className="font-black text-white text-xs uppercase tracking-widest flex items-center gap-2">
+                  <Package size={16} className="text-[#38BDF8]" />
+                  Active Outgoing Dispatches
+                </h4>
+                <div className="flex gap-2">
+                   <span className="bg-[#0D1421] border border-[#1E2D45] text-[#6B7FA8] text-[9px] font-black px-2 py-1 rounded">
+                     {marketplaceLoads.length} ACTIVE LOADS
+                   </span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm border-separate border-spacing-0">
+                  <thead className="bg-[#0D1421]">
+                    <tr className="text-[#6B7FA8] font-black tracking-widest text-[10px] uppercase">
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">ID</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">Route</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">Cargo</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">Weight</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">EWB NO</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">Driver</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45]">Status</th>
+                      <th className="px-6 py-4 border-b border-[#1E2D45] text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#1E2D45]">
+                    {marketplaceLoads.length > 0 ? marketplaceLoads.map((load) => (
+                      <tr key={load._id} className="hover:bg-[#1A2235]/50 transition-colors">
+                        <td className="px-6 py-4 font-mono font-bold text-white text-xs">{load.bookingId}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[#E8F0FE] font-bold text-xs">{load.pickupAddress?.city || 'Pune'}</span>
+                            <div className="h-px w-3 bg-[#3D4F6B]"></div>
+                            <span className="text-[#E8F0FE] font-bold text-xs">{load.deliveryAddress?.city || 'Mumbai'}</span>
                           </div>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold flex items-center gap-1 text-[#F59E0B] text-sm">
-                          <MapPin size={14} /> {truck.distance}
-                        </div>
-                        <div className="text-xs font-mono-data font-bold text-[#E8F0FE] mt-1">₹{truck.pricePerKm}/km</div>
-                      </div>
-                    </div>
-                    <div className="mb-4">
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-[#6B7FA8]">Available Capacity</span>
-                        <span className="font-mono-data font-bold text-[#0DD9B0]">{truck.capacity}%</span>
-                      </div>
-                      <div className="w-full bg-[#1E2D45] rounded-full h-2">
-                        <div className="bg-[#0DD9B0] h-2 rounded-full" style={{ width: truck.capacity + '%' }}></div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleBookingRequest(truck)}
-                      className="w-full bg-transparent border-2 border-[#F59E0B] text-[#F59E0B] hover:bg-[#F59E0B] hover:text-black font-bold py-2 rounded transition-colors text-sm"
-                    >
-                      REQUEST BOOKING
-                    </button>
-                  </div>
-                ))}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-[10px] font-black text-[#38BDF8] px-2 py-0.5 rounded bg-[#38BDF8]/10 border border-[#38BDF8]/30 uppercase tracking-tighter">
+                            {load.cargoType || 'Steel'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 font-mono text-xs text-[#6B7FA8]">{(load.weightKg / 1000).toFixed(1)} MT</td>
+                        <td className="px-6 py-4">
+                           {load.eway_bill_number ? (
+                              <span className="font-mono-data text-white text-[10px] bg-[#111827] px-2 py-1 rounded border border-[#1E2D45]">{load.eway_bill_number}</span>
+                           ) : (
+                              <button 
+                                onClick={async () => {
+                                  const ewb = prompt("Enter 12-digit E-Way Bill Number for Dispatch:");
+                                  if (ewb && ewb.length >= 10) {
+                                    try {
+                                      const res = await fetch(`/api/freight/loads/${load._id}`, {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+                                        body: JSON.stringify({ eway_bill_number: ewb })
+                                      });
+                                      if (res.ok) {
+                                        setMarketplaceLoads(prev => prev.map(l => l._id === load._id ? { ...l, eway_bill_number: ewb } : l));
+                                        showToast('EWB Assigned to Dispatch', 'success');
+                                      }
+                                    } catch(e) {}
+                                  }
+                                }}
+                                className="text-[8px] font-black text-[#F59E0B] uppercase tracking-widest border border-[#F59E0B]/30 px-2 py-1 rounded hover:bg-[#F59E0B]/10 transition-all"
+                              >
+                                ASSIGN EWB
+                              </button>
+                           )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {load.driverId ? (
+                             <div className="flex items-center gap-2">
+                               <div className="w-6 h-6 rounded-full bg-[#38BDF8]/20 flex items-center justify-center text-[#38BDF8]"><Truck size={12}/></div>
+                               <span className="text-xs font-bold text-[#E8F0FE]">{load.driverId.name || load.driverId}</span>
+                             </div>
+                          ) : (
+                             <span className="text-[10px] text-[#6B7FA8] italic">Awaiting Acceptance</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`text-[9px] font-black uppercase tracking-tighter px-2 py-0.5 rounded border ${
+                            load.status === 'SEARCHING FOR DRIVER' ? 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30 animate-pulse' :
+                            load.status === 'DRIVER ASSIGNED' ? 'bg-[#38BDF8]/10 text-[#38BDF8] border-[#38BDF8]/30' :
+                            load.status === 'IN_TRANSIT' ? 'bg-[#A855F7]/10 text-[#A855F7] border-[#A855F7]/30' :
+                            load.status === 'COMPLETED' ? 'bg-[#0DD9B0]/10 text-[#0DD9B0] border-[#0DD9B0]/30' :
+                            'bg-[#6B7FA8]/10 text-[#6B7FA8] border-[#6B7FA8]/30'
+                          }`}>
+                            {load.status.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-[10px] text-[#6B7FA8] font-bold">₹{load.pricePerKm}/KM</td>
+                        <td className="px-6 py-4 text-center">
+                          {load.status === 'SEARCHING FOR DRIVER' ? (
+                            <button 
+                              onClick={async () => {
+                                if (!window.confirm("Cancel this marketplace load?")) return;
+                                const token = getToken();
+                                const res = await fetch(`/api/freight/loads/${load._id}/cancel`, {
+                                  method: 'PATCH',
+                                  headers: { 'Authorization': `Bearer ${token}` }
+                                });
+                                if (res.ok) showToast('Load removed from marketplace', 'info');
+                              }}
+                              className="text-[#F43F5E] hover:text-white hover:bg-[#F43F5E] p-1.5 rounded-lg border border-[#F43F5E]/30 transition-all"
+                            >
+                              <X size={14} />
+                            </button>
+                          ) : (
+                            <button className="text-[#6B7FA8] p-1.5 opacity-30 cursor-not-allowed"><Maximize size={14}/></button>
+                          )}
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan="8" className="px-6 py-20 text-center opacity-30">
+                           <div className="flex flex-col items-center gap-3">
+                             <Truck size={48} />
+                             <p className="font-black text-xs uppercase tracking-widest">No loads currently in marketplace</p>
+                           </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -1244,16 +1414,16 @@ const ManagerDashboard = () => {
           </div>
         )}
 
-        {/* GUARD FEED TAB */}
-        {activeTab === 'GUARD FEED' && (
+        {/* INCOMING ARRIVALS TAB (Formerly Guard Feed) */}
+        {activeTab === 'INCOMING ARRIVALS' && (
           <div className="space-y-8 animate-fade-in pb-12">
             <div className="flex justify-between items-center mb-6">
               <div>
                 <h2 className="text-2xl font-bold flex items-center gap-3 text-[#E8F0FE]">
-                  <ShieldCheck size={28} className="text-[#F59E0B]" />
-                  Guard Security Feed
+                  <ShieldCheck size={28} className="text-[#0DD9B0]" />
+                  Incoming Arrivals
                 </h2>
-                <p className="text-sm text-[#6B7FA8] mt-1">Real-time manual entries and gate intelligence from security team.</p>
+                <p className="text-sm text-[#6B7FA8] mt-1">Gate entry verification, vehicle OCR scans, and driver vibe checks.</p>
               </div>
               <div className="flex gap-3">
                 <div className="bg-[#111827] border border-[#F59E0B]/40 px-4 py-2 rounded-lg flex items-center gap-2">
@@ -1284,10 +1454,30 @@ const ManagerDashboard = () => {
                       {/* Card Header */}
                       <div className="p-4 bg-[#0D1421] border-b border-[#1E2D45] flex justify-between items-center">
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-[#F59E0B]/10 flex items-center justify-center text-[#F59E0B]">
-                            <Truck size={16} />
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                            entry.scan_method === 'ewb' ? 'bg-[#0DD9B0]/10 text-[#0DD9B0]' :
+                            entry.scan_method === 'ocr' ? 'bg-[#38BDF8]/10 text-[#38BDF8]' :
+                            entry.scan_method === 'entry_pass' ? 'bg-[#A855F7]/10 text-[#A855F7]' :
+                            'bg-[#F59E0B]/10 text-[#F59E0B]'
+                          }`}>
+                            {entry.scan_method === 'ewb' ? <ShieldCheck size={16} /> : 
+                             entry.scan_method === 'entry_pass' ? <FileText size={16} /> :
+                             <Truck size={16} />}
                           </div>
-                          <span className="font-mono font-bold text-white">{entry.vehicleNo || '—'}</span>
+                          <div className="flex flex-col">
+                            <span className="font-mono font-bold text-white leading-none mb-0.5">{entry.vehicleNo || '—'}</span>
+                            <span className={`text-[7px] font-black uppercase tracking-tighter w-fit px-1 rounded border ${
+                              entry.scan_method === 'ewb' ? 'bg-[#0DD9B0]/20 text-[#0DD9B0] border-[#0DD9B0]/30' :
+                              entry.scan_method === 'ocr' ? 'bg-[#38BDF8]/20 text-[#38BDF8] border-[#38BDF8]/30' :
+                              entry.scan_method === 'entry_pass' ? 'bg-[#A855F7]/20 text-[#A855F7] border-[#A855F7]/30' :
+                              'bg-[#F59E0B]/20 text-[#F59E0B] border-[#F59E0B]/30'
+                            }`}>
+                               {entry.scan_method === 'ewb' ? 'EWB VERIFIED' : 
+                                entry.scan_method === 'ocr' ? 'AI SCANNED' :
+                                entry.scan_method === 'entry_pass' ? 'ENTRY PASS' :
+                                'MANUAL ENTRY'}
+                            </span>
+                          </div>
                         </div>
                         <span className="text-[10px] font-bold text-[#6B7FA8]">
                           {entry.createdAt ? new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
@@ -1318,7 +1508,15 @@ const ManagerDashboard = () => {
                         <div className="flex justify-between items-start">
                           <div>
                             <div className="text-[10px] font-bold text-[#6B7FA8] uppercase mb-1">Challan ID</div>
-                            <div className="text-sm font-bold text-white font-mono">{entry.challanId || '—'}</div>
+                            <div className="flex flex-col gap-1">
+                              <span className="text-sm font-bold text-white font-mono">{entry.challanId || '—'}</span>
+                              {entry.eway_bill_number && (
+                                <div className="flex items-center gap-1 bg-[#0DD9B0]/10 border border-[#0DD9B0]/30 px-1.5 py-0.5 rounded w-max">
+                                  <ShieldCheck size={10} className="text-[#0DD9B0]" />
+                                  <span className="text-[10px] text-[#0DD9B0] font-bold tracking-widest">{entry.eway_bill_number}</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                           <div className="text-right">
                             <div className="text-[10px] font-bold text-[#6B7FA8] uppercase mb-1">Vibe Check</div>
@@ -1429,8 +1627,14 @@ const ManagerDashboard = () => {
                             <div className="text-xs font-bold text-[#F43F5E]">{entry.visualLoad || '—'}</div>
                           </div>
                         </div>
-                        <div className="text-xs text-[#6B7FA8]">
-                          Challan: <span className="text-white font-mono">{entry.challanId || String(entry._id)}</span>
+                        <div className="text-xs text-[#6B7FA8] flex flex-col gap-1">
+                          <div>Challan: <span className="text-white font-mono">{entry.challanId || String(entry._id)}</span></div>
+                          {entry.eway_bill_number && (
+                            <div className="flex items-center gap-1 bg-[#0DD9B0]/10 border border-[#0DD9B0]/30 px-1.5 py-0.5 rounded w-max">
+                              <ShieldCheck size={10} className="text-[#0DD9B0]" />
+                              <span className="text-[10px] text-[#0DD9B0] font-bold tracking-widest">{entry.eway_bill_number}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="p-3 bg-[#0D1421] border-t border-[#1E2D45]">
@@ -1486,7 +1690,7 @@ const ManagerDashboard = () => {
                               ? <span className="text-[#F59E0B] font-bold">{entry.dockAssigned}</span>
                               : <span className="text-[#6B7FA8]">—</span>}
                           </td>
-                          <td className="px-5 py-3 font-mono text-[#E8F0FE] text-xs">{(entry.totalWeight ?? 0).toLocaleString()} KG</td>
+                          <td className="px-5 py-3 font-mono text-[#E8F0FE] text-xs">{entry.totalWeight || '0'}</td>
                           <td className="px-5 py-3">
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${entry.status === 'VERIFIED' ? 'bg-[#0DD9B0]/10 text-[#0DD9B0]' : 'bg-[#F43F5E]/10 text-[#F43F5E]'}`}>
                               {entry.status === 'VERIFIED' ? '✓ APPROVED' : '✗ REJECTED'}
@@ -1583,10 +1787,25 @@ const ManagerDashboard = () => {
                         min="1"
                         max={selectedTruck?.availableKg || 25000}
                         value={bookingForm.weightKg}
-                        onChange={(e) => setBookingForm({ ...bookingForm, weightKg: e.target.value })}
+                        onChange={(e) => setBookingForm({ ...bookingForm, weightKg: e.target.value, requiredStock: e.target.value })}
                         className="w-full border border-[#1E2D45] rounded-md p-3 text-sm font-mono bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#F59E0B] focus:outline-none"
                         placeholder="e.g. 1500"
                       />
+                    </div>
+                    <div>
+                       <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Link To Inventory Stock</label>
+                       <select 
+                         value={bookingForm.inventoryId}
+                         onChange={(e) => setBookingForm({ ...bookingForm, inventoryId: e.target.value })}
+                         className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#F59E0B] focus:outline-none"
+                       >
+                         <option value="">-- No Link (Generic) --</option>
+                         {inventory.map(item => (
+                           <option key={item._id} value={item._id}>
+                             {item.sku} - {item.name} ({item.currentQty - item.reservedQty - (item.allocatedQty || 0)} avail)
+                           </option>
+                         ))}
+                       </select>
                     </div>
                   </div>
 
@@ -1612,7 +1831,7 @@ const ManagerDashboard = () => {
                       value={bookingForm.pickupAddress.street}
                       onChange={(e) => setBookingForm({ ...bookingForm, pickupAddress: { ...bookingForm.pickupAddress, street: e.target.value } })}
                       className="w-full border border-[#1E2D45] rounded-md p-2.5 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none"
-                      placeholder="Street Address (Pickup)"
+                      placeholder="Chakan MIDC Gate 1"
                     />
                     <div className="grid grid-cols-2 gap-3">
                       <input
@@ -1958,19 +2177,45 @@ const ManagerDashboard = () => {
             <div className="p-6 space-y-4 overflow-y-auto max-h-[80vh] custom-scrollbar">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Item SKU</label>
-                  <input type="text" className="w-full border border-[#1E2D45] rounded-md p-3 text-sm font-mono-data bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none" placeholder="e.g. SKU-9912" />
+                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Item SKU *</label>
+                  <input type="text" value={newItemForm.sku} onChange={e => setNewItemForm({ ...newItemForm, sku: e.target.value.toUpperCase() })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm font-mono-data bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none" placeholder="e.g. SKU-9912" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Category</label>
-                  <select className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none">
-                    <option>Electronics</option><option>Steel</option><option>Pharma</option><option>FMCG</option><option>Machinery</option>
+                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Category *</label>
+                  <select value={newItemForm.category} onChange={e => setNewItemForm({ ...newItemForm, category: e.target.value })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none">
+                    <option value="ELECTRONICS">Electronics</option>
+                    <option value="STEEL">Steel</option>
+                    <option value="PHARMA">Pharma</option>
+                    <option value="FMCG">FMCG</option>
+                    <option value="AUTO_PARTS">Auto Parts</option>
+                    <option value="TEXTILES">Textiles</option>
+                    <option value="CHEMICALS">Chemicals</option>
                   </select>
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Item Name</label>
-                <input type="text" className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none" placeholder="e.g. Industrial Pipe" />
+                <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Item Name *</label>
+                <input type="text" value={newItemForm.name} onChange={e => setNewItemForm({ ...newItemForm, name: e.target.value })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none" placeholder="e.g. Industrial Pipe" />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-1">
+                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Current Stock *</label>
+                  <input type="number" min="0" value={newItemForm.currentQty} onChange={e => setNewItemForm({ ...newItemForm, currentQty: e.target.value })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm font-mono-data bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#F59E0B] focus:outline-none" placeholder="0" />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Unit *</label>
+                  <select value={newItemForm.unit} onChange={e => setNewItemForm({ ...newItemForm, unit: e.target.value })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#F59E0B] focus:outline-none">
+                    <option value="pcs">pcs</option>
+                    <option value="boxes">boxes</option>
+                    <option value="kg">kg</option>
+                    <option value="tons">tons</option>
+                    <option value="liters">liters</option>
+                  </select>
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Bin Loc *</label>
+                  <input type="text" value={newItemForm.binLocation} onChange={e => setNewItemForm({ ...newItemForm, binLocation: e.target.value })} className="w-full border border-[#1E2D45] rounded-md p-3 text-sm font-mono-data bg-[#0D1421] text-[#E8F0FE] focus:ring-2 focus:ring-[#0DD9B0] focus:outline-none" placeholder="A1-01-01" />
+                </div>
               </div>
             </div>
             <div className="p-4 bg-[#0D1421] border-t border-[#1E2D45] flex gap-3">
@@ -1990,7 +2235,15 @@ const ManagerDashboard = () => {
               <div className="flex items-center gap-3">
                 <Truck className="text-[#F59E0B]" size={20} />
                 <h3 className="font-bold text-lg text-white font-mono">{selectedVerification.vehicleNo}</h3>
-                <span className="px-2 py-0.5 bg-[#1E2D45] text-[#6B7FA8] text-xs font-bold rounded">{selectedVerification.challanId || String(selectedVerification._id)}</span>
+                <div className="flex flex-col">
+                  <span className="px-2 py-0.5 bg-[#1E2D45] text-[#6B7FA8] text-xs font-bold rounded mb-1 w-max">{selectedVerification.challanId || String(selectedVerification._id)}</span>
+                  {selectedVerification.eway_bill_number && (
+                    <div className="flex items-center gap-1 bg-[#0DD9B0]/10 border border-[#0DD9B0]/30 px-2 py-0.5 rounded w-max">
+                      <ShieldCheck size={12} className="text-[#0DD9B0]" />
+                      <span className="text-[10px] text-[#0DD9B0] font-bold tracking-widest">{selectedVerification.eway_bill_number}</span>
+                    </div>
+                  )}
+                </div>
               </div>
               <button onClick={() => setSelectedVerification(null)} className="text-[#6B7FA8] hover:text-white p-1">
                 <X size={24} />
@@ -2000,33 +2253,34 @@ const ManagerDashboard = () => {
             {/* Split Content: Image on top, details below or side by side */}
             <div className="flex flex-col md:flex-row overflow-y-auto max-h-[80vh] custom-scrollbar">
               
-              {/* Evidence Section */}
-              <div className="w-full md:w-1/2 min-h-[300px] bg-black relative border-b md:border-b-0 md:border-r border-[#1E2D45]">
-                {selectedVerification.imageUrl && (selectedVerification.imageUrl.startsWith('data:image') || selectedVerification.imageUrl.startsWith('http')) ? (
-                  <>
-                    <img src={selectedVerification.imageUrl} alt="Load Proof" className="w-full h-full object-contain" />
-                    <button 
-                      onClick={() => window.open(selectedVerification.imageUrl, '_blank')}
-                      className="absolute bottom-4 right-4 p-2 bg-black/60 rounded backdrop-blur hover:bg-[#F59E0B] text-white transition-colors"
-                      title="Open full resolution in new tab"
-                    >
-                      <Maximize size={18} />
-                    </button>
-                  </>
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center text-[#6B7FA8] bg-[#0A0F1A]">
-                    <Package size={48} className="mb-2 opacity-10" />
-                    <p className="text-sm font-mono tracking-wider opacity-60">NO VISUAL EVIDENCE</p>
-                    <p className="text-[10px] mt-1 opacity-40">Entry was submitted without a proof photo</p>
+              {/* Dual-Evidence Vibe Check Section */}
+              <div className="w-full md:w-2/3 bg-black flex flex-col md:flex-row border-b md:border-b-0 md:border-r border-[#1E2D45]">
+                {/* Left: Challan Document */}
+                <div className="flex-1 relative border-r border-[#1E2D45]/30">
+                  <div className="absolute top-2 left-2 z-10 bg-black/60 px-2 py-1 rounded text-[8px] font-black text-[#F59E0B] uppercase tracking-widest border border-[#F59E0B]/30">DOCUMENT_SCAN</div>
+                  {selectedVerification.imageUrl ? (
+                    <img src={selectedVerification.imageUrl.startsWith('data:image') ? selectedVerification.imageUrl : `data:image/jpeg;base64,${selectedVerification.imageUrl}`} alt="Challan Doc" className="w-full h-full object-contain" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[#6B7FA8] text-[10px] uppercase font-mono">No Doc Scan</div>
+                  )}
+                </div>
+
+                {/* Right: Truck Proof */}
+                <div className="flex-1 relative">
+                  <div className="absolute top-2 left-2 z-10 bg-black/60 px-2 py-1 rounded text-[8px] font-black text-[#0DD9B0] uppercase tracking-widest border border-[#0DD9B0]/30">LIVE_TRUCK_PROOF</div>
+                  {selectedVerification.vehicleImageUrl ? (
+                    <img src={selectedVerification.vehicleImageUrl.startsWith('data:image') ? selectedVerification.vehicleImageUrl : `data:image/jpeg;base64,${selectedVerification.vehicleImageUrl}`} alt="Truck Proof" className="w-full h-full object-contain" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[#6B7FA8] text-[10px] uppercase font-mono">No Truck Photo</div>
+                  )}
+                  <div className="absolute bottom-4 right-4 bg-black/60 px-3 py-1 rounded backdrop-blur text-white text-[10px] font-bold border border-white/10 uppercase z-20">
+                    Vibe: <span className={selectedVerification.visualLoad === 'FULL' ? 'text-[#0DD9B0]' : 'text-[#F43F5E]'}>{selectedVerification.visualLoad || 'N/A'}</span>
                   </div>
-                )}
-                <div className="absolute top-4 left-4 bg-black/60 px-3 py-1 rounded backdrop-blur text-white text-xs font-bold border border-white/10 uppercase">
-                  Vibe Check: <span className={selectedVerification.visualLoad === 'FULL' ? 'text-[#0DD9B0]' : 'text-[#F43F5E]'}>{selectedVerification.visualLoad || 'N/A'}</span>
                 </div>
               </div>
 
               {/* Data Section */}
-              <div className="w-full md:w-1/2 p-6 flex flex-col">
+              <div className="w-full md:w-1/3 p-6 flex flex-col bg-[#0D1421]">
                 <div className="space-y-6 flex-1">
                   <div>
                     <h4 className="text-[10px] font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Routing Details</h4>
@@ -2043,13 +2297,17 @@ const ManagerDashboard = () => {
                     <h4 className="text-[10px] font-bold text-[#6B7FA8] uppercase tracking-wider mb-2">Cargo Metrics</h4>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-[#0D1421] p-3 rounded border border-[#1E2D45]">
-                        <span className="block text-[10px] text-[#6B7FA8] uppercase mb-1">Items / Desc</span>
-                        <span className="text-sm text-white">{selectedVerification.cargoDescription || 'No description'}</span>
+                        <span className="block text-[10px] text-[#6B7FA8] uppercase mb-1">Declared Mass</span>
+                        <span className="text-sm text-white font-mono">{selectedVerification.totalWeight || '0'}</span>
                       </div>
                       <div className="bg-[#0D1421] p-3 rounded border border-[#1E2D45]">
-                        <span className="block text-[10px] text-[#6B7FA8] uppercase mb-1">Measured Wt</span>
-                        <span className="text-sm text-white font-mono">{(selectedVerification.totalWeight ?? 0).toLocaleString()} KG</span>
+                        <span className="block text-[10px] text-[#6B7FA8] uppercase mb-1">Declared Value</span>
+                        <span className="text-sm text-[#F59E0B] font-mono">₹{selectedVerification.totalValue || '0'}</span>
                       </div>
+                    </div>
+                    <div className="bg-[#0D1421] p-3 rounded border border-[#1E2D45] mt-3">
+                      <span className="block text-[10px] text-[#6B7FA8] uppercase mb-1">Goods Description</span>
+                      <span className="text-sm text-white">{selectedVerification.goodsDescription || selectedVerification.cargoDescription || 'No description'}</span>
                     </div>
                   </div>
 
@@ -2089,6 +2347,59 @@ const ManagerDashboard = () => {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {showPostLoadModal && (
+        <div className="fixed inset-0 bg-[#080C14]/90 backdrop-blur-md z-[10000] flex justify-center items-center p-4">
+          <div className="bg-[#111827] border-t-4 border-t-[#F59E0B] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in shadow-[0_0_50px_rgba(245,158,11,0.2)]">
+            <div className="bg-[#0D1421] p-5 flex justify-between items-center border-b border-[#1E2D45]">
+              <h3 className="font-black text-white text-lg tracking-widest uppercase flex items-center gap-3">
+                <Truck className="text-[#F59E0B]" /> Post Marketplace Load
+              </h3>
+              <button onClick={() => setShowPostLoadModal(false)} className="text-[#6B7FA8] hover:text-white transition-colors"><X size={24} /></button>
+            </div>
+            
+            <form onSubmit={handlePostLoad} className="p-8 space-y-6">
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">From Location</label>
+                    <input required type="text" value={postLoadForm.fromLocation} onChange={e => setPostLoadForm({...postLoadForm, fromLocation: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none" placeholder="e.g. Pune" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">To Location</label>
+                    <input required type="text" value={postLoadForm.toLocation} onChange={e => setPostLoadForm({...postLoadForm, toLocation: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none" placeholder="e.g. Mumbai" />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">Cargo Type</label>
+                    <select value={postLoadForm.cargoType} onChange={e => setPostLoadForm({...postLoadForm, cargoType: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none">
+                       {['Electronics', 'FMCG', 'Auto Parts', 'Pharma', 'Steel', 'Textiles'].map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">Weight (MT)</label>
+                    <input required type="number" step="0.1" value={postLoadForm.weightTonnes} onChange={e => setPostLoadForm({...postLoadForm, weightTonnes: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none" placeholder="e.g. 15.5" />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">Rate (₹/KM)</label>
+                    <input required type="number" value={postLoadForm.ratePerKm} onChange={e => setPostLoadForm({...postLoadForm, ratePerKm: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none" placeholder="e.g. 45" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-[#6B7FA8] uppercase tracking-widest mb-2">Pickup Date/Time</label>
+                    <input required type="datetime-local" value={postLoadForm.pickupDateTime} onChange={e => setPostLoadForm({...postLoadForm, pickupDateTime: e.target.value})} className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-lg p-3 text-sm text-white focus:border-[#F59E0B] outline-none" />
+                  </div>
+               </div>
+
+               <button type="submit" className="w-full bg-[#F59E0B] hover:bg-[#D97706] text-black font-black py-4 rounded-lg text-xs uppercase tracking-[0.2em] shadow-xl shadow-[#F59E0B]/10 active:scale-95 transition-all">
+                  Broadcast to Marketplace
+               </button>
+            </form>
           </div>
         </div>
       )}

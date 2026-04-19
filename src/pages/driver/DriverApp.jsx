@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import MobileBottomTabs from '../../components/layout/MobileBottomTabs';
-import { Map, Package, Truck, IndianRupee, MapPin, CheckSquare, Camera, Navigation, UserCircle, CheckCircle2, Star, LogOut, Volume2, Bell, Zap } from 'lucide-react';
+import { Map, Package, Truck, IndianRupee, MapPin, CheckSquare, Camera, Navigation, UserCircle, CheckCircle2, Star, LogOut, Volume2, Bell, Zap, Shield, ShieldCheck, Maximize, RefreshCw } from 'lucide-react';
 import { useSocket } from '../../services/SocketProvider';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
@@ -174,7 +174,7 @@ const RouteTab = ({ isLive, toggleLive }) => {
 
   return (
     <div className="flex flex-col h-full animate-fade-in bg-[#080C14]">
-      <div className="h-[calc(100vh-120px)] w-full relative border-b border-[#1E2D45] overflow-hidden">
+      <div className="h-[45vh] w-full relative border-b border-[#1E2D45] overflow-hidden shrink-0">
         <MapContainer
           center={[19.0760, 72.8777]}
           zoom={10}
@@ -202,6 +202,7 @@ const RouteTab = ({ isLive, toggleLive }) => {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-3 bg-[#080C14]">
+        <div className="text-[10px] font-black text-[#6B7FA8] uppercase tracking-[0.2em] ml-2 mb-2">Delivery Route</div>
         {stops.map((stop, index) => (
           <div
             key={stop.id}
@@ -320,134 +321,91 @@ const StopDetail = () => {
   );
 };
 
-const FreightTab = ({ isLive, toggleLive }) => {
-  const { addToast: showToast } = useToast();
-  const { t } = useLanguage();
-  const navigate = useNavigate();
+const FreightTab = ({ isLive, toggleLive, tripEwb, setTripEwb, showBoard, setShowBoard, ewbConfirmed, setEwbConfirmed }) => {
   const { user } = useAuth();
   const { socket } = useSocket();
-  const [truck, setTruck] = useState(null);
-  const [incomingJobs, setIncomingJobs] = useState([]);
-  const [marketStats, setMarketStats] = useState({ averageMonthlyRate: 45, totalMarketBookings: 0 });
+  const { t } = useLanguage();
+  const { addToast: showToast } = useToast();
+  const ewbInputRef = useRef(null);
+  
+  const [availableLoads, setAvailableLoads] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
+  const [newLoadAlert, setNewLoadAlert] = useState(null);
+  const [currentLoad, setCurrentLoad] = useState(0);
+  const [ratePerKm, setRatePerKm] = useState(0);
+  const totalCapacity = (user?.capacity_tonnes || 10) * 1000; // in kg
+  const usedPercent = totalCapacity > 0 ? Math.min((currentLoad / totalCapacity) * 100, 100).toFixed(1) : 0;
+  const availableKg = Math.max(totalCapacity - currentLoad, 0);
 
-  const CARGO_CATEGORIES = [
-    { id: 'ELECTRONICS', label: 'Electronics', color: '#38BDF8' },
-    { id: 'FMCG', label: 'FMCG', color: '#F59E0B' },
-    { id: 'AUTO_PARTS', label: 'Auto Parts', color: '#F43F5E' },
-    { id: 'PHARMA', label: 'Pharma', color: '#0DD9B0' },
-    { id: 'TEXTILES', label: 'Textiles', color: '#A855F7' },
-    { id: 'GENERAL', label: 'Any Cargo', color: '#6B7FA8' }
-  ];
-
-  useEffect(() => {
-    const fetchMarketData = async () => {
-      try {
-        const token = localStorage.getItem('logivision_token');
-        const headers = { 'Authorization': `Bearer ${token}` };
-
-        // 1. Fetch My Truck State
-        const truckRes = await fetch(`/api/freight/my-truck`, { headers });
-        const truckData = await truckRes.json();
-        if (truckData.success) {
-          setTruck(truckData.data.truck);
-        }
-
-        // 2. Fetch Market Stats
-        const statsRes = await fetch(`/api/freight/market/stats`, { headers });
-        const statsData = await statsRes.json();
-        if (statsData.success) {
-          setMarketStats(statsData.data);
-        }
-
-        // 3. Fetch Available/Pending Market Jobs
-        const jobsRes = await fetch(`/api/freight/bookings?driverId=${user?._id}&status=PENDING`, { headers });
-        const jobsData = await jobsRes.json();
-        if (jobsData.success) {
-          setIncomingJobs(jobsData.data.bookings);
-        }
-      } catch (err) {
-        console.error('Market fetch failed:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (user?._id) fetchMarketData();
-  }, [user]);
-
-  // Real-time socket listener for new jobs
-  useEffect(() => {
-    if (!socket || !user?._id) return;
-
-    const handleNewFreight = (data) => {
-      if (data.booking.driverId?._id === user?._id || data.booking.driverId === user?._id) {
-        setIncomingJobs(prev => [data.booking, ...prev.filter(j => j._id !== data.booking._id)]);
-        showToast(`New request from ${data.booking.createdBy?.name || 'Manager'}!`, 'info');
-      }
-    };
-
-    socket.on('freight:available', handleNewFreight);
-    return () => socket.off('freight:available');
-  }, [socket, user, showToast]);
-
-  const updateMarketStatus = async (updates) => {
-    setUpdating(true);
+  const fetchAvailableLoads = async () => {
     try {
       const token = localStorage.getItem('logivision_token');
-      const res = await fetch(`/api/freight/my-truck/market`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
+      const res = await fetch('/api/freight/loads', {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
       if (data.success) {
-        setTruck(data.data.truck);
-        showToast('Market availability updated!', 'success');
+        setAvailableLoads(data.data);
       }
     } catch (err) {
-      showToast('Update failed', 'error');
+      console.error('Fetch loads failed:', err);
     } finally {
-      setUpdating(false);
+      setLoading(false);
     }
   };
 
-  const handleToggleCargo = (category) => {
-    const current = truck?.cargoPreferences || [];
-    const updated = current.includes(category)
-      ? current.filter(c => c !== category)
-      : [...current, category];
-    updateMarketStatus({ cargoPreferences: updated });
-  };
+  useEffect(() => {
+    if (user?._id) fetchAvailableLoads();
+  }, [user, isLive]);
 
-  const handleLoadChange = (e) => {
-    const val = parseInt(e.target.value);
-    setTruck(prev => {
-      if (!prev) return prev;
-      return { ...prev, currentLoadKg: val, availableCapacityPercent: 100 - (val / prev.totalCapacityKg * 100) };
-    });
-  };
-
-  const handleAcceptJob = async (jobId) => {
-    try {
-      const token = localStorage.getItem('logivision_token');
-      const res = await fetch(`/api/freight/bookings/${jobId}/accept`, {
-        method: 'PATCH',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estimatedArrivalTime: new Date(Date.now() + 3600 * 1000) })
-      });
-
-      if (res.ok) {
-        showToast('Job accepted! Moving to your route.', 'success');
-        navigate('/driver');
+  useEffect(() => {
+    if (!socket) return;
+    
+    socket.on('load:posted', (load) => {
+      // Matches if driver capacity is enough
+      const matchesCapacity = (load.weightKg / 1000) <= (user.capacity_tonnes || 0);
+      if (isLive && matchesCapacity) {
+        setNewLoadAlert(load);
+        setAvailableLoads(prev => [load, ...prev]);
       }
-    } catch (err) {
-      showToast('Action failed', 'error');
-    }
+    });
+
+    socket.on('load:accepted', (data) => {
+       setAvailableLoads(prev => prev.filter(l => l._id !== data.loadId));
+       if (newLoadAlert?._id === data.loadId) setNewLoadAlert(null);
+    });
+
+    socket.on('load:cancelled', (data) => {
+       setAvailableLoads(prev => prev.filter(l => l._id !== data.loadId));
+       if (newLoadAlert?._id === data.loadId) setNewLoadAlert(null);
+    });
+
+    return () => {
+      socket.off('load:posted');
+      socket.off('load:accepted');
+      socket.off('load:cancelled');
+    };
+  }, [socket, isLive, user.capacity_tonnes, newLoadAlert]);
+
+  const handleAcceptLoad = async (loadId) => {
+     try {
+       const token = localStorage.getItem('logivision_token');
+       const res = await fetch(`/api/freight/loads/${loadId}/accept`, {
+         method: 'PATCH',
+         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+       });
+       const data = await res.json();
+       if (data.success) {
+         showToast('Load Accepted! Head to pickup.', 'success');
+         setAvailableLoads(prev => prev.filter(l => l._id !== loadId));
+         setNewLoadAlert(null);
+       } else {
+         showToast(data.message || 'Acceptance failed', 'error');
+         fetchAvailableLoads();
+       }
+     } catch (err) {
+       showToast('Server error', 'error');
+     }
   };
 
   if (loading) return (
@@ -459,239 +417,384 @@ const FreightTab = ({ isLive, toggleLive }) => {
   return (
     <div className="flex flex-col h-full bg-[#080C14] overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b border-[#1E2D45] bg-[#0D1421] shrink-0">
-        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <Truck className="text-[#F59E0B]" /> {t('FREIGHT_MARKET')}
+      <div className="p-4 border-b border-[#1E2D45] bg-[#0D1421] shrink-0 flex justify-between items-center">
+        <h2 className="text-xl font-black text-white flex items-center gap-2 uppercase tracking-tighter">
+          <Truck className="text-[#F59E0B]" /> Freight Market
         </h2>
+        <div className="flex items-center gap-2">
+           <span className={`text-[8px] font-black uppercase tracking-widest ${isLive ? 'text-[#0DD9B0]' : 'text-[#6B7FA8]'}`}>
+             {isLive ? 'Online' : 'Offline'}
+           </span>
+           <div className={`w-2.5 h-2.5 rounded-full ${isLive ? 'bg-[#0DD9B0] animate-pulse shadow-[0_0_8px_#0DD9B0]' : 'bg-[#1E2D45]'}`}></div>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-        {/* Capacity Overview */}
-        <div className="text-center py-4 bg-[#0D1421]/50 rounded-2xl border border-[#1E2D45] relative overflow-hidden">
-          <div className="relative z-10">
-            <h1 className="text-3xl font-mono-data font-black text-[#F59E0B] tracking-tighter">
-              {truck ? (truck.availableCapacityPercent || 0).toFixed(0) : 100}% {t('CAPACITY_FREE')}
-            </h1>
-            <p className="text-[#6B7FA8] text-[10px] mt-1 uppercase tracking-widest font-bold">
-              Broadcast availability to earn more
-            </p>
-          </div>
-          <div className="absolute inset-0 bg-gradient-to-t from-[#F59E0B]/5 to-transparent"></div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar pb-24">
+        {/* Dispatch Trip Card */}
+        <div className="bg-[#111827] border border-[#F59E0B]/50 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+           <div className="flex items-center justify-between mb-4">
+               <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B]">
+                     <ShieldCheck size={18} />
+                  </div>
+                  <span className="text-xs font-black text-white uppercase tracking-widest">Digital Board</span>
+               </div>
+              {ewbConfirmed && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#0DD9B0]/20 rounded-full border border-[#0DD9B0]/30 animate-pulse">
+                   <div className="w-1 h-1 rounded-full bg-[#0DD9B0]"></div>
+                   <span className="text-[8px] font-black text-[#0DD9B0] uppercase tracking-tighter">Verified</span>
+                </div>
+              )}
+           </div>
+
+            <div className="space-y-4">
+               <div className="relative">
+                  <label className="text-[9px] font-black text-[#6B7FA8] uppercase tracking-[0.2em] mb-2.5 block ml-1">E-Way Bill Number</label>
+                 <div className="flex items-center gap-2 h-14">
+                    <input 
+                      ref={ewbInputRef}
+                      type="text" 
+                      inputMode="numeric"
+                      value={tripEwb}
+                      onChange={(e) => {
+                         setTripEwb(e.target.value.replace(/\D/g, '').slice(0, 12));
+                         setEwbConfirmed(false);
+                      }}
+                      placeholder="ENTER 12-DIGIT EWB" 
+                      className="flex-1 h-full bg-[#080C14] border border-[#1E2D45] rounded-xl px-4 text-sm text-[#F59E0B] font-mono focus:border-[#F59E0B] outline-none placeholder:text-[10px]"
+                    />
+                     <button 
+                       onClick={async () => {
+                         if (tripEwb.length < 5) return showToast('Enter valid EWB', 'error');
+                         const token = localStorage.getItem('logivision_token');
+                         const res = await fetch('/api/entries/ewb', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ ewbNumber: tripEwb, driverId: user?._id })
+                         });
+                         if (res.ok) {
+                            setEwbConfirmed(true);
+                            localStorage.setItem('active_trip_ewb', tripEwb);
+                            showToast('EWB Linked to Dispatch!', 'success');
+                         }
+                       }}
+                       className="h-full px-6 bg-[#F59E0B] text-black rounded-xl font-black uppercase text-[10px] active:scale-95 transition-all shadow-lg shadow-[#F59E0B]/10 shrink-0"
+                     >
+                       Confirm
+                     </button>
+                 </div>
+              </div>
+
+              {tripEwb.length > 0 && (
+                <button 
+                   onClick={() => setShowBoard(true)}
+                   className="w-full py-3 bg-[#1E2D45] border border-[#3D4F6B] rounded-xl flex items-center justify-center gap-2 text-white font-black uppercase text-[10px] tracking-widest hover:bg-[#25324D] transition-colors"
+                >
+                   <Maximize size={16} /> Show to Guard
+                </button>
+              )}
+           </div>
         </div>
 
-        {/* Vehicle Load Card */}
+        {/* Vehicle Load Status */}
         <div className="bg-[#111827] border border-[#1E2D45] rounded-2xl p-5 shadow-xl">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-full bg-[#38BDF8]/10 flex items-center justify-center text-[#38BDF8]">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-[#0DD9B0]/10 flex items-center justify-center text-[#0DD9B0]">
               <Truck size={20} />
             </div>
             <div>
-              <h3 className="text-white font-bold text-sm">{t('VEHICLE_LOAD_STATUS')}</h3>
-              <p className="text-[10px] text-[#6B7FA8] uppercase font-bold tracking-widest">Total: {truck?.totalCapacityKg || 0} KG</p>
+              <div className="text-sm font-black text-white uppercase tracking-wider">Vehicle Load Status</div>
+              <div className="text-[9px] text-[#6B7FA8] font-bold uppercase tracking-widest">Total: {totalCapacity.toLocaleString()} KG</div>
             </div>
           </div>
-
-          <div className="space-y-6">
-            <div>
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-[#E8F0FE] text-xs font-bold">{t('CURRENT_LOAD')}:</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={truck?.currentLoadKg || 0}
-                    onChange={(e) => updateMarketStatus({ currentLoadKg: parseInt(e.target.value) })}
-                    className="w-20 bg-[#080C14] border border-[#1E2D45] rounded px-2 py-1 text-right text-[#F59E0B] font-mono-data text-xs"
-                  />
-                  <span className="text-[#6B7FA8] font-bold text-[10px]">KG</span>
-                </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-white font-bold">Current Load:</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={currentLoad}
+                  onChange={e => setCurrentLoad(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-20 bg-[#080C14] border border-[#F59E0B] rounded-lg px-2 py-1 text-sm text-[#F59E0B] font-mono text-center outline-none"
+                />
+                <span className="text-[10px] text-[#6B7FA8] font-bold">KG</span>
               </div>
-              <input
-                type="range"
-                min="0"
-                max={truck?.totalCapacityKg || 25000}
-                value={truck?.currentLoadKg || 0}
-                onChange={handleLoadChange}
-                onMouseUp={() => truck && updateMarketStatus({ currentLoadKg: truck.currentLoadKg })}
-                onTouchEnd={() => truck && updateMarketStatus({ currentLoadKg: truck.currentLoadKg })}
-                className="w-full accent-[#38BDF8] h-1.5 bg-[#1E2D45] rounded-full appearance-none cursor-pointer"
+            </div>
+            <div className="relative h-2 bg-[#1E2D45] rounded-full overflow-hidden">
+              <div
+                className="absolute left-0 top-0 h-full bg-[#0DD9B0] rounded-full transition-all"
+                style={{ width: `${usedPercent}%` }}
               />
-              <div className="flex justify-between mt-2">
-                <span className="text-[10px] font-bold text-[#0DD9B0]">{t('AVAILABLE')}: {(truck?.totalCapacityKg || 0) - (truck?.currentLoadKg || 0)} KG</span>
-                <span className="text-[10px] font-bold text-[#6B7FA8]">{(100 - (truck?.availableCapacityPercent || 0)).toFixed(1)}% {t('USED')}</span>
-              </div>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-[9px] font-black text-[#0DD9B0] uppercase tracking-widest">Available: {availableKg.toLocaleString()} KG</span>
+              <span className="text-[9px] font-bold text-[#6B7FA8]">{usedPercent}% Used</span>
             </div>
           </div>
         </div>
 
-        {/* Pricing Strategy Card */}
+        {/* Pricing Strategy */}
         <div className="bg-[#111827] border border-[#1E2D45] rounded-2xl p-5 shadow-xl">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-full bg-[#0DD9B0]/10 flex items-center justify-center text-[#0DD9B0]">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-[#F59E0B]/10 flex items-center justify-center text-[#F59E0B]">
               <IndianRupee size={20} />
             </div>
             <div>
-              <h3 className="text-white font-bold text-sm">{t('PRICING_STRATEGY')}</h3>
-              <p className="text-[10px] text-[#6B7FA8] uppercase font-bold tracking-widest">Optimize your earnings</p>
+              <div className="text-sm font-black text-white uppercase tracking-wider">Pricing Strategy</div>
+              <div className="text-[9px] text-[#6B7FA8] font-bold uppercase tracking-widest">Optimize Your Earnings</div>
             </div>
           </div>
-
-          <div className="space-y-6">
-            <div className="bg-[#080C14] p-4 rounded-xl border border-[#1E2D45] flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1">{t('RATE_PER_KM')}</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-[#F59E0B] font-bold">₹</span>
-                  <input
-                    type="number"
-                    value={truck?.pricePerKm || 0}
-                    onChange={(e) => setTruck(prev => ({ ...prev, pricePerKm: parseInt(e.target.value) }))}
-                    onBlur={(e) => updateMarketStatus({ pricePerKm: parseInt(e.target.value) })}
-                    className="w-16 bg-transparent border-none text-2xl font-mono-data font-black text-[#F59E0B] focus:ring-0 p-0"
-                  />
-                </div>
+          <div className="space-y-3">
+            <div className="text-[9px] text-[#6B7FA8] font-black uppercase tracking-widest">Rate Per KM</div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <IndianRupee size={16} className="text-[#F59E0B]" />
+                <input
+                  type="number"
+                  value={ratePerKm}
+                  onChange={e => setRatePerKm(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-16 bg-transparent text-[#F59E0B] font-black text-lg font-mono outline-none"
+                />
               </div>
               <div className="text-right">
-                <div className={`text-[9px] font-black px-2 py-0.5 rounded-full inline-block mb-1 ${(truck?.pricePerKm || 0) <= marketStats.averageMonthlyRate
-                  ? 'bg-[#0DD9B0]/10 text-[#0DD9B0]'
-                  : 'bg-[#F43F5E]/10 text-[#F43F5E]'
-                  }`}>
-                  {(truck?.pricePerKm || 0) <= marketStats.averageMonthlyRate ? t('COMPETITIVE') : t('PREMIUM_RATE')}
+                <div className={`text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-widest ${
+                  ratePerKm >= 45 ? 'bg-[#0DD9B0]/20 text-[#0DD9B0] border border-[#0DD9B0]/30' :
+                  ratePerKm > 0 ? 'bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30' :
+                  'bg-[#1E2D45] text-[#6B7FA8] border border-[#1E2D45]'
+                }`}>
+                  {ratePerKm >= 45 ? 'Competitive' : ratePerKm > 0 ? 'Below Avg' : 'Not Set'}
                 </div>
-                <p className="text-[10px] text-gray-500 font-bold uppercase">MKT AVG: ₹{marketStats.averageMonthlyRate}</p>
+                <div className="text-[8px] text-[#6B7FA8] font-bold mt-1">MKT AVG: ₹45</div>
               </div>
+            </div>
+            <div className="pt-2 border-t border-[#1E2D45]">
+              <label className="text-[9px] text-[#6B7FA8] font-black uppercase tracking-widest block mb-2">Market Description</label>
+              <textarea
+                rows={2}
+                placeholder="Tell managers about your specialization... (e.g., 'Expert in fragile glass transport')"
+                className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-xl px-3 py-2 text-[10px] text-white outline-none resize-none placeholder:text-[#2A3A52] focus:border-[#F59E0B] transition-colors"
+              />
             </div>
           </div>
         </div>
 
-        {/* Specialized cargo details */}
-        <div className="space-y-3">
-          <h3 className="text-[#6B7FA8] text-[10px] font-bold uppercase tracking-[0.2em] ml-2">{t('MARKET_DESCRIPTION')}</h3>
-          <div className="bg-[#111827] border border-[#1E2D45] rounded-2xl p-4 shadow-xl">
-            <textarea
-              placeholder="Tell managers about your specialization... (e.g., 'Expert in fragile glass transport')"
-              value={truck?.cargoDescription || ''}
-              onChange={(e) => setTruck(prev => ({ ...prev, cargoDescription: e.target.value }))}
-              onBlur={(e) => updateMarketStatus({ cargoDescription: e.target.value })}
-              className="w-full bg-[#080C14] border border-[#1E2D45] rounded-xl p-3 text-xs text-white placeholder:text-gray-600 focus:border-[#F59E0B] transition-all min-h-[80px]"
-            />
-          </div>
+        {/* Marketplace Explorer (Warehouse Pool) */}
+        <div className="space-y-4 mt-2">
+           <div className="flex items-center justify-between mx-1">
+              <h3 className="text-white font-black text-[10px] uppercase tracking-[0.2em] flex items-center gap-2">
+                Cargo Pool Explorer
+              </h3>
+              <span className="text-[8px] text-[#6B7FA8] font-bold">LIVE NETWORK</span>
+           </div>
+           <div className="grid grid-cols-2 gap-3">
+              {[
+                { cat: 'Electronics', count: 12, icon: Package, color: '#F59E0B' },
+                { cat: 'FMCG', count: 8, icon: Truck, color: '#38BDF8' },
+                { cat: 'Auto Parts', count: 5, icon: ShieldCheck, color: '#0DD9B0' },
+                { cat: 'Steel', count: 3, icon: Package, color: '#D946EF' }
+              ].map(item => (
+                 <div key={item.cat} className="bg-[#0D1421] border border-[#1E2D45] p-5 rounded-3xl flex flex-col items-center gap-3 active:scale-95 transition-all group overflow-hidden relative">
+                    <div className="absolute top-0 right-0 p-1 opacity-5 group-hover:opacity-10 transition-opacity">
+                       <item.icon size={40} />
+                    </div>
+                    <div className="w-12 h-12 rounded-2xl bg-[#111827] flex items-center justify-center border border-white/5 shadow-inner">
+                       <item.icon size={24} style={{ color: item.color }} />
+                    </div>
+                    <div className="text-center relative z-10">
+                       <div className="text-[10px] font-black text-white uppercase tracking-widest">{item.cat}</div>
+                       <div className="text-[8px] text-[#0DD9B0] font-bold uppercase tracking-tighter mt-1">{item.count} LOADS READY</div>
+                    </div>
+                 </div>
+              ))}
+           </div>
         </div>
 
-        {/* Preferred Cargo */}
-        <div className="space-y-3">
-          <h3 className="text-[#6B7FA8] text-[10px] font-bold uppercase tracking-[0.2em] ml-2">{t('PREFERRED_CARGO')}</h3>
-          <div className="grid grid-cols-2 gap-3">
-            {CARGO_CATEGORIES.map(cat => (
-              <button
-                key={cat.id}
-                onClick={() => handleToggleCargo(cat.id)}
-                disabled={updating}
-                className={`py-4 rounded-xl border-2 transition-all flex flex-col items-center justify-center gap-2 ${truck?.cargoPreferences?.includes(cat.id)
-                  ? 'bg-[#1A2235] border-[#F59E0B] shadow-[0_0_15px_rgba(245,158,11,0.2)] scale-[1.02]'
-                  : 'bg-[#0D1421] border-[#1E2D45] opacity-50'
-                  }`}
-              >
-                <div
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: truck?.cargoPreferences?.includes(cat.id) ? cat.color : '#4B5563' }}
-                ></div>
-                <span className={`text-[11px] font-bold uppercase tracking-wider ${truck?.cargoPreferences?.includes(cat.id) ? 'text-white' : 'text-[#6B7FA8]'}`}>
-                  {cat.label}
-                </span>
-              </button>
-            ))}
-          </div>
+        {/* Load Matching Preferences */}
+        <div className="bg-[#111827] border border-[#1E2D45] rounded-3xl p-6 space-y-5 shadow-2xl relative overflow-hidden group">
+           <div className="absolute top-0 right-0 p-4 opacity-5">
+              <RefreshCw size={40} />
+           </div>
+           <div className="flex items-center gap-3 border-b border-[#1E2D45] pb-4">
+              <div className="w-8 h-8 rounded-full bg-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B]"><IndianRupee size={16}/></div>
+              <h3 className="text-[10px] font-black text-white uppercase tracking-[0.2em]">Smart Filter Preferences</h3>
+           </div>
+           
+           <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-2">
+                 <label className="text-[8px] text-[#6B7FA8] font-black uppercase tracking-widest">Target Cargo</label>
+                 <div className="relative">
+                    <select className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-xl px-3 py-3 text-[10px] text-white font-black appearance-none outline-none focus:border-[#F59E0B] cursor-pointer">
+                       <option>Electronics</option>
+                       <option>FMCG</option>
+                       <option>Auto Parts</option>
+                       <option>Steel</option>
+                    </select>
+                 </div>
+              </div>
+              <div className="space-y-2">
+                 <label className="text-[8px] text-[#6B7FA8] font-black uppercase tracking-widest">Max Payload</label>
+                 <select className="w-full bg-[#0D1421] border border-[#1E2D45] rounded-xl px-3 py-3 text-[10px] text-white font-black outline-none appearance-none focus:border-[#F59E0B] cursor-pointer">
+                    <option>5 Tonnes</option>
+                    <option>10 Tonnes</option>
+                    <option>15 Tonnes</option>
+                 </select>
+              </div>
+           </div>
         </div>
 
-        {/* Real-time Jobs Section */}
+        {/* Real-time Available Loads */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between ml-2">
-            <h3 className="text-[#F59E0B] text-[10px] font-bold uppercase tracking-[0.2em]">{t('LIVE_JOB_MARKETPLACE')}</h3>
-            <div className="flex gap-1 items-center">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#0DD9B0] animate-pulse"></span>
-              <span className="text-[9px] text-[#0DD9B0] font-bold">ONLINE</span>
-            </div>
-          </div>
+           <div className="flex items-center justify-between mx-1">
+              <h3 className="text-white font-black text-[10px] uppercase tracking-widest flex items-center gap-2">
+                Available Loads
+                {isLive && <span className="bg-[#0DD9B0] text-black text-[8px] px-1.5 py-0.5 rounded-sm">{availableLoads.length} MATCHES</span>}
+              </h3>
+              <button onClick={() => fetchAvailableLoads()} className="text-[#6B7FA8] hover:text-[#F59E0B] transition-colors"><IndianRupee size={14} /></button>
+           </div>
 
-          <div className="space-y-4">
-            {incomingJobs.length === 0 ? (
-              <div className="py-12 border-2 border-dashed border-[#1E2D45] rounded-3xl flex flex-col items-center justify-center opacity-40">
-                <Package size={32} className="text-[#6B7FA8] mb-3" />
-                <p className="text-xs text-[#6B7FA8] font-bold">Waiting for booking requests...</p>
-              </div>
-            ) : (
-              incomingJobs.map(job => (
-                <div key={job._id} className="bg-[#1A2235] rounded-2xl p-5 border border-[#1E2D45] shadow-2xl animate-[slideInUp_0.4s_ease-out] relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 px-4 py-1 bg-[#F59E0B] text-black text-[10px] font-black uppercase tracking-tighter rounded-bl-xl z-10 shadow-lg">
-                    HOT REQUEST
-                  </div>
+           {isLive ? (
+              availableLoads.length > 0 ? (
+                <div className="space-y-4">
+                   {availableLoads.map(load => (
+                     <div key={load._id} className="bg-[#111827] border border-[#1E2D45] rounded-2xl overflow-hidden shadow-xl animate-fade-in border-l-4 border-l-[#F59E0B]">
+                       <div className="p-4 bg-[#0D1421] border-b border-[#1E2D45] flex justify-between items-center">
+                          <span className="text-[9px] font-black text-[#6B7FA8] uppercase tracking-widest font-mono">{load.bookingId}</span>
+                          <span className="text-[10px] font-black text-[#F59E0B] uppercase">₹{load.offeredRate}/KM</span>
+                       </div>
+                       <div className="p-5 space-y-4">
+                          <div className="flex items-center gap-4">
+                             <div className="flex flex-col items-center">
+                                <div className="w-2 h-2 rounded-full border border-[#F59E0B]"></div>
+                                <div className="w-px h-6 bg-gradient-to-b from-[#F59E0B] to-[#0DD9B0]"></div>
+                                <div className="w-2 h-2 rounded-full bg-[#0DD9B0]"></div>
+                             </div>
+                             <div className="flex-1">
+                                <div className="text-xs font-bold text-white mb-2">{load.pickupLocation || load.fromLocation || 'Origin'}</div>
+                                <div className="text-xs font-bold text-white">{load.deliveryLocation || load.toLocation || 'Destination'}</div>
+                             </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-3">
+                             <div className="bg-[#080C14] px-3 py-2 rounded-xl border border-[#1E2D45]">
+                                <div className="text-[8px] text-[#6B7FA8] uppercase font-bold mb-0.5">Cargo</div>
+                                <div className="text-[10px] text-[#F59E0B] font-black truncate">{load.cargoType || 'General'}</div>
+                             </div>
+                             <div className="bg-[#080C14] px-3 py-2 rounded-xl border border-[#1E2D45]">
+                                <div className="text-[8px] text-[#6B7FA8] uppercase font-bold mb-0.5">Weight</div>
+                                <div className="text-[10px] text-white font-black">{load.weightTonnes || (load.weightKg / 1000)} MT</div>
+                             </div>
+                          </div>
 
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] text-[#0DD9B0] font-bold uppercase tracking-widest">{job.createdBy?.name || 'Manager'}</span>
-                        <span className="text-[10px] text-[#6B7FA8]">wants your service</span>
-                      </div>
-                      <h4 className="text-white font-bold text-lg leading-tight uppercase">{job.cargoDescription}</h4>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-mono-data font-black text-[#F59E0B]">₹{job.totalCost?.toLocaleString()}</div>
-                      <div className="text-[9px] text-[#6B7FA8] font-bold uppercase">Estimated Pay</div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 bg-[#080C14]/50 p-4 rounded-xl border border-[#1E2D45] mb-6">
-                    <div className="flex flex-col items-center shrink-0">
-                      <div className="w-2.5 h-2.5 rounded-full border-2 border-[#F59E0B]"></div>
-                      <div className="w-px h-6 bg-gradient-to-b from-[#F59E0B] to-[#0DD9B0]"></div>
-                      <div className="w-2.5 h-2.5 rounded-full bg-[#0DD9B0]"></div>
-                    </div>
-                    <div className="flex-1 space-y-3">
-                      <div>
-                        <div className="text-[9px] text-gray-500 font-bold uppercase tracking-widest leading-none mb-1">From</div>
-                        <div className="text-white text-xs font-bold truncate">{job.pickupAddress?.city || 'Origin'}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-none mb-1">Deliver To</div>
-                        <div className="text-white text-xs font-bold truncate">{job.deliveryAddress?.city || 'Destination'}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-4 mb-6">
-                    <div className="flex-1 bg-[#080C14] p-3 rounded-xl border border-[#1E2D45] text-center">
-                      <div className="text-[9px] text-gray-500 font-bold uppercase">Weight</div>
-                      <div className="text-white text-sm font-mono-data font-bold">{job.weightKg} KG</div>
-                    </div>
-                    <div className="flex-1 bg-[#080C14] p-3 rounded-xl border border-[#1E2D45] text-center">
-                      <div className="text-[9px] text-gray-500 font-bold uppercase">Dist.</div>
-                      <div className="text-white text-sm font-mono-data font-bold">{job.distanceKm} KM</div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleAcceptJob(job._id)}
-                    className="w-full bg-[#F59E0B] hover:bg-[#D97706] text-black font-black py-4 rounded-xl transition-all shadow-[0_4px_20px_rgba(245,158,11,0.2)] text-xs uppercase tracking-widest active:scale-95"
-                  >
-                    ACCEPT AND BOOK TRUCK
-                  </button>
+                          <button 
+                            onClick={() => handleAcceptLoad(load._id)}
+                            className="w-full bg-[#F59E0B] hover:bg-[#D97706] text-black font-black py-4 rounded-xl text-xs uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-[#F59E0B]/20"
+                          >
+                            Accept Load
+                          </button>
+                       </div>
+                     </div>
+                   ))}
                 </div>
-              ))
-            )}
-          </div>
+              ) : (
+                <div className="py-20 flex flex-col items-center justify-center opacity-30 border-2 border-dashed border-[#1E2D45] rounded-3xl mx-1">
+                   <Package size={48} className="mb-4" />
+                   <p className="font-black text-[10px] uppercase tracking-widest text-center">No matching loads nearby</p>
+                </div>
+              )
+           ) : (
+             <div className="relative group">
+                <div className="bg-[#111827]/50 border-2 border-dashed border-[#1E2D45] rounded-[32px] p-12 flex flex-col items-center justify-center text-center gap-4 group-hover:border-[#F59E0B]/30 transition-all">
+                   <div className="w-16 h-16 rounded-full bg-[#0D1421] border border-[#1E2D45] flex items-center justify-center text-[#6B7FA8] group-hover:scale-110 group-hover:text-[#F59E0B] transition-all">
+                      <Truck size={32} />
+                   </div>
+                   <div>
+                      <h4 className="text-white font-black text-xs uppercase tracking-widest mb-1">Marketplace Offline</h4>
+                      <p className="text-[9px] text-[#6B7FA8] font-bold uppercase max-w-[150px] mx-auto leading-relaxed">Broadcast your location to receive live freight offers.</p>
+                   </div>
+                   <button 
+                     onClick={toggleLive}
+                     className="mt-2 bg-[#F59E0B] text-black px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-[#F59E0B]/20 active:scale-95 transition-all"
+                   >
+                     Go Live Now
+                   </button>
+                </div>
+             </div>
+           )}
         </div>
       </div>
 
-      {/* STICKY GO LIVE BUTTON AT BOTTOM */}
-      <div className="p-4 bg-[#080C14] border-t border-[#1E2D45] shrink-0">
+      {newLoadAlert && (
+         <div className="fixed inset-0 z-[10000] bg-black/95 flex flex-col items-center justify-center p-6 animate-fade-in backdrop-blur-md">
+            <div className="w-full max-w-xs bg-[#111827] border-4 border-[#F59E0B] rounded-3xl overflow-hidden shadow-[0_0_50px_rgba(245,158,11,0.3)] relative text-center">
+               <div className="absolute top-0 right-0 p-4">
+                  <button onClick={() => setNewLoadAlert(null)} className="text-[#6B7FA8] translate-x-1 -translate-y-1"><Bell size={24}/></button>
+               </div>
+               
+               <div className="p-8 space-y-6">
+                  <div className="w-20 h-20 bg-[#F59E0B]/10 rounded-full flex items-center justify-center mx-auto border-2 border-[#F59E0B]/30 mb-2">
+                     <Truck size={40} className="text-[#F59E0B] animate-bounce" />
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-1">New Load!</h3>
+                    <p className="text-[10px] text-[#F59E0B] font-black uppercase tracking-widest">{(newLoadAlert.pickupLocation || newLoadAlert.fromLocation)} to {(newLoadAlert.deliveryLocation || newLoadAlert.toLocation)}</p>
+                  </div>
+
+                  <div className="bg-[#080C14] rounded-2xl p-5 border border-[#1E2D45] space-y-4">
+                     <div className="flex justify-between items-center py-2 border-b border-[#1E2D45]">
+                        <span className="text-[10px] text-[#6B7FA8] font-bold uppercase">Cargo</span>
+                        <span className="text-[10px] text-white font-black uppercase">{newLoadAlert.cargoType}</span>
+                     </div>
+                     <div className="flex justify-between items-center py-2 border-b border-[#1E2D45]">
+                        <span className="text-[10px] text-[#6B7FA8] font-bold uppercase">Weight</span>
+                        <span className="text-[10px] text-white font-black">{newLoadAlert.weightTonnes || (newLoadAlert.weightKg/1000)} MT</span>
+                     </div>
+                     <div className="flex justify-between items-center pt-2">
+                        <span className="text-[10px] text-[#6B7FA8] font-bold uppercase">Rate</span>
+                        <span className="text-xl font-black font-mono-data text-[#0DD9B0]">₹{newLoadAlert.offeredRate}/KM</span>
+                     </div>
+                  </div>
+
+                  <button 
+                    onClick={() => handleAcceptLoad(newLoadAlert._id)}
+                    className="w-full bg-[#0DD9B0] text-black font-black py-5 rounded-2xl text-sm uppercase tracking-widest shadow-xl shadow-[#0DD9B0]/20 active:scale-95 transition-all"
+                  >
+                    Accept Now
+                  </button>
+               </div>
+            </div>
+         </div>
+      )}
+
+      {/* Floating Board Overlay */}
+      {showBoard && (
+         <div 
+           className="fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center p-10 animate-fade-in"
+           onClick={() => setShowBoard(false)}
+         >
+            <div className="absolute top-10 right-10 text-[#6B7FA8] uppercase font-black text-[10px] tracking-[0.3em]">Tap to exit</div>
+            <div className="text-[12px] text-[#F59E0B] font-black uppercase tracking-[0.5em] mb-10 opacity-60">E-Way Bill Number</div>
+            <div className="text-white font-mono font-black text-center leading-none tracking-tight select-none" style={{ fontSize: '72px' }}>
+               {tripEwb.match(/.{1,4}/g)?.join(' ') || tripEwb}
+            </div>
+            <div className="mt-20 flex flex-col items-center gap-4">
+               <ShieldCheck size={80} className="text-[#0DD9B0] opacity-20" />
+               <span className="text-[10px] text-[#1D4ED8] font-black uppercase tracking-[0.2em] bg-[#1D4ED8]/10 px-4 py-1.5 rounded-full border border-[#1D4ED8]/20">Verified Agent Device</span>
+            </div>
+         </div>
+      )}
+
+      <div className="absolute bottom-4 left-4 right-4 z-40">
         <button
           onClick={toggleLive}
-          className={`w-full py-4 rounded-lg font-bold tracking-[0.2em] uppercase transition-all flex items-center justify-center gap-3 ${
-            isLive ? 'bg-[#059669] text-white' : 'bg-[#1E2D45] text-gray-400'
+          className={`w-full py-4 rounded-xl font-black tracking-widest uppercase transition-all flex items-center justify-center gap-2 shadow-2xl border-2 ${
+            isLive 
+              ? 'bg-[#0DD9B0] text-black border-[#0DD9B0] shadow-[#0DD9B0]/20' 
+              : 'bg-[#111827] text-[#6B7FA8] border-[#1E2D45]'
           }`}
         >
-          {isLive && <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>}
-          {isLive ? 'GO LIVE' : 'GO OFFLINE'}
+          {isLive && <span className="w-2 h-2 bg-black rounded-full animate-pulse"></span>}
+          {isLive ? 'GO OFFLINE' : 'GO LIVE'}
         </button>
       </div>
     </div>
@@ -1071,30 +1174,45 @@ const DriverApp = () => {
   const { user } = useAuth();
   const { socket } = useSocket();
   const [isLive, setIsLive] = useState(false);
+  const [tripEwb, setTripEwb] = useState(localStorage.getItem('active_trip_ewb') || '');
+  const [showBoard, setShowBoard] = useState(false);
+  const [ewbConfirmed, setEwbConfirmed] = useState(false);
 
-  const toggleLive = () => {
+  const toggleLive = async () => {
     const newState = !isLive;
     setIsLive(newState);
-    if (newState) {
-      if (socket) {
-        socket.emit('driver:live', { 
-          driverId: user._id, 
-          driverName: user.name, 
-          location: { lat: 18.6529, lng: 73.7276 }, 
-          status: 'available', 
-          rate: 38, 
-          vehicle: 'Truck', 
-          capacity: 20, 
-          timestamp: Date.now() 
-        });
+    
+    try {
+      const token = localStorage.getItem('logivision_token');
+      await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ isGoLive: newState })
+      });
+
+      if (newState) {
+        if (socket) {
+          socket.emit('driver:live', { 
+            driverId: user._id, 
+            driverName: user.name, 
+            location: { lat: 18.6529, lng: 73.7276 }, 
+            status: 'available', 
+            rate: 38, 
+            vehicle: 'Truck', 
+            capacity: 20, 
+            timestamp: Date.now() 
+          });
+        }
+      } else {
+        if (socket) {
+          socket.emit('driver:offline', { 
+            driverId: user._id, 
+            status: 'offline' 
+          });
+        }
       }
-    } else {
-      if (socket) {
-        socket.emit('driver:offline', { 
-          driverId: user._id, 
-          status: 'offline' 
-        });
-      }
+    } catch (err) {
+      console.error('Failed to toggle live status:', err);
     }
   };
 
@@ -1114,7 +1232,18 @@ const DriverApp = () => {
             <Route path="/" element={<Navigate to="/driver/freight" replace />} />
             <Route path="/route" element={<RouteTab isLive={isLive} toggleLive={toggleLive} />} />
             <Route path="/stop/:id" element={<StopDetail />} />
-            <Route path="/freight" element={<FreightTab isLive={isLive} toggleLive={toggleLive} />} />
+            <Route path="/freight" element={
+              <FreightTab 
+                isLive={isLive} 
+                toggleLive={toggleLive} 
+                tripEwb={tripEwb}
+                setTripEwb={setTripEwb}
+                showBoard={showBoard}
+                setShowBoard={setShowBoard}
+                ewbConfirmed={ewbConfirmed}
+                setEwbConfirmed={setEwbConfirmed}
+              /> 
+            } />
             <Route path="/earnings" element={<EarningsTab />} />
             <Route path="/profile" element={<DriverProfileTab />} />
             <Route path="*" element={<Navigate to="/driver/freight" replace />} />

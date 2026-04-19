@@ -2,19 +2,21 @@ services:
 - type: web
   name: logivision-ai
   env: node
-  rootDir: backend
-  buildCommand: cd .. && npm install && npm run build && cd backend && npm install
-  startCommand: node server.js
+  plan: free
+  buildCommand: npm install && npm run build && cd backend && npm install
+  startCommand: node backend/server.js
   envVars:
   - key: NODE_ENV
     value: production
   - key: MONGODB_URI
-    sync: false
+    value: "SET_IN_RENDER_DASHBOARD"
   - key: GEMINI_API_KEY
-    sync: false
+    value: "SET_IN_RENDER_DASHBOARD"
   - key: RAZORPAY_KEY_ID
-    sync: false
+    value: "SET_IN_RENDER_DASHBOARD"
   - key: RAZORPAY_KEY_SECRET
-    sync: false
+    value: "SET_IN_RENDER_DASHBOARD"
   - key: JWT_SECRET
-    sync: false
+    value: "SET_IN_RENDER_DASHBOARD"
+  - key: JWT_EXPIRES_IN
+    value: 7d

@@ -155,6 +155,16 @@ const inventoryItemSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Zero-Overbooking controls
+  marketplaceVisible: {
+    type: Boolean,
+    default: true  // Manager can hide from driver feed
+  },
+  allocatedQty: {
+    type: Number,
+    default: 0,
+    min: 0  // Qty committed to active bookings (not yet reserved/shipped)
+  },
   qrCode: {
     type: String,
     trim: true
@@ -189,9 +199,9 @@ inventoryItemSchema.methods.calculateStatus = function () {
   return this.status;
 };
 
-// Get available quantity
+// Get available quantity (subtracts both reserved and tentatively allocated qty)
 inventoryItemSchema.methods.getAvailableQuantity = function () {
-  return Math.max(0, this.currentQty - this.reservedQty);
+  return Math.max(0, this.currentQty - this.reservedQty - (this.allocatedQty || 0));
 };
 
 // Reserve stock

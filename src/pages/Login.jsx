@@ -144,9 +144,17 @@ const Login = () => {
             ))}
           </div>
 
-          {/* Bottom Location Tag */}
+          {/* Integration Badges */}
+          <div className="login-fade-5 font-dm text-[11px] text-[#6B7FA8]/80 text-center mb-8 uppercase tracking-widest border border-[#1E2D45] bg-[#080C14] rounded-full px-4 py-2 opacity-80 shadow-md">
+            Works alongside: <span className="font-bold text-[#6B7FA8]">Tally • SAP • Oracle • E-Way Bill • FASTag</span>
+          </div>
+
+          {/* Bottom Location Tag and Disclaimer */}
           <div className="login-fade-6 font-jb text-[11px] text-[#3D4F6B] tracking-wide text-center">
-            JNPT Hub Panvel • Nagpur MIHAN • Golden Quadrilateral
+            Chakan MIDC — Warehouse Gate • Ranjangaon MIDC Gate 1 • Golden Quadrilateral
+            <div className="mt-2 text-[#6B7FA8]/70 italic">
+              Built for private MIDC warehouse gates — not port terminals
+            </div>
           </div>
         </div>
       </div>

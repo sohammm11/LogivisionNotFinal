@@ -14,8 +14,8 @@ const Shift = require('./models/Shift.model');
 
 // Sample data
 const warehouses = [
-  { id: 'WH-001', name: 'JNPT Hub Panvel', location: 'Panvel, Maharashtra' },
-  { id: 'WH-002', name: 'Nagpur MIHAN', location: 'Nagpur, Maharashtra' }
+  { id: 'WH-001', name: 'Chakan MIDC Gate 1', location: 'Pune, Maharashtra' },
+  { id: 'WH-002', name: 'Ranjangaon MIDC Gate 1', location: 'Pune, Maharashtra' }
 ];
 
 const users = [
@@ -891,7 +891,7 @@ const seedDatabase = async () => {
         truckId: createdTrucks[0]._id,
         driverId: driverUser._id,
         warehouseId: 'WH-001',
-        cargoDescription: 'Electronics goods from Samsung to JNPT warehouse',
+        cargoDescription: 'Electronics goods from Samsung to Chakan MIDC warehouse',
         weightKg: 850,
         distanceKm: 45,
         pricePerKm: 25,
@@ -904,7 +904,7 @@ const seedDatabase = async () => {
           coordinates: { lat: 28.5355, lng: 77.3910 }
         },
         deliveryAddress: {
-          street: 'JNPT Hub Panvel',
+          street: 'Chakan MIDC Gate 1',
           city: 'Panvel',
           state: 'Maharashtra',
           pincode: '410206',
@@ -930,7 +930,7 @@ const seedDatabase = async () => {
           coordinates: { lat: 19.0760, lng: 72.8777 }
         },
         deliveryAddress: {
-          street: 'JNPT Hub Panvel',
+          street: 'Chakan MIDC Gate 1',
           city: 'Panvel',
           state: 'Maharashtra',
           pincode: '410206',

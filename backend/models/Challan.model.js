@@ -27,8 +27,15 @@ const challanSchema = new mongoose.Schema({
     index: true
   },
   imageUrl: {
+    type: String
+  },
+  challan_source: {
     type: String,
-    required: true
+    enum: ['ocr', 'entry_pass', 'ewb', 'manual'],
+    default: 'ocr'
+  },
+  vehicleImageUrl: {
+    type: String
   },
   vehicleNo: {
     type: String,
@@ -41,11 +48,23 @@ const challanSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  goodsDescription: {
+    type: String,
+    trim: true
+  },
+  eway_bill_number: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  totalValue: {
+    type: String,
+    default: '0'
+  },
   itemsList: [itemSchema],
   totalWeight: {
-    type: Number,
-    required: true,
-    min: 0
+    type: String,
+    default: '0'
   },
   declaredLoad: {
     type: String,

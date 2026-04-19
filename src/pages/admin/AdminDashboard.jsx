@@ -58,6 +58,7 @@ const AdminDashboard = () => {
   // Loaders
   const [fetchingDocks, setFetchingDocks] = useState(false);
   const [fetchingUsers, setFetchingUsers] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState('general');
   const [appSettings, setAppSettings] = useState({
     platformName: 'LogiVision AI',
     defaultGate: 'Gate 01',
@@ -71,6 +72,14 @@ const AdminDashboard = () => {
       smsMismatch: false,
       autoFlagEmptyVibe: true,
       requireRejectionReason: true
+    },
+    integrations: {
+      ewayBill: false,
+      tally: false,
+      tallyWebhook: '',
+      fastag: false,
+      whatsappAlerts: false,
+      whatsappNumber: ''
     }
   });
   const [isEditingWarehouse, setIsEditingWarehouse] = useState(false);
@@ -420,6 +429,23 @@ const AdminDashboard = () => {
       } else throw new Error(data.message);
     } catch(err) {
       showToast(err.message, 'error');
+    }
+  };
+
+  const handleSaveIntegrations = async () => {
+    try {
+      const res = await fetch('/api/settings/integrations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` },
+        body: JSON.stringify(appSettings.integrations || {})
+      });
+      const data = await res.json();
+      if(data.success) {
+        showToast('Integrations updated successfully', 'success');
+        setAppSettings(data.data);
+      } else throw new Error(data.message);
+    } catch(err) {
+      showToast(err.message || 'Failed to update integrations', 'error');
     }
   };
 
@@ -843,6 +869,23 @@ const AdminDashboard = () => {
                 <div className="space-y-8 animate-fade-in pb-12">
                   <h1 className="text-xl font-bold text-[#E8F0FE]">System Settings <span className="text-xs text-[#F43F5E] font-mono-data ml-2 border border-[#F43F5E]/30 px-2 py-0.5 rounded">ADMIN VIEW</span></h1>
                   
+                  {/* Nav Tabs */}
+                  <div className="flex gap-6 border-b border-[#1E2D45] pb-[1px]">
+                    <button 
+                      onClick={() => setActiveSettingsTab('general')} 
+                      className={`text-sm font-bold uppercase tracking-wider pb-3 border-b-[3px] transition-all px-2 ${activeSettingsTab === 'general' ? 'border-[#0DD9B0] text-[#0DD9B0]' : 'border-transparent text-[#6B7FA8] hover:text-[#E8F0FE]'}`}
+                    >
+                      General Settings
+                    </button>
+                    <button 
+                      onClick={() => setActiveSettingsTab('integrations')} 
+                      className={`text-sm font-bold uppercase tracking-wider pb-3 border-b-[3px] transition-all px-2 ${activeSettingsTab === 'integrations' ? 'border-[#0DD9B0] text-[#0DD9B0]' : 'border-transparent text-[#6B7FA8] hover:text-[#E8F0FE]'}`}
+                    >
+                      Integrations
+                    </button>
+                  </div>
+
+                  {activeSettingsTab === 'general' && (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     {/* Platform Settings */}
                     <div className="bg-[#111827] border border-[#1E2D45] rounded-md overflow-hidden">
@@ -989,6 +1032,93 @@ const AdminDashboard = () => {
                        </div>
                     </div>
                   </div>
+                  )}
+
+                  {activeSettingsTab === 'integrations' && (
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  
+                        {/* E-Way Bill API */}
+                        <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden flex flex-col items-start p-6">
+                          <div className="flex w-full justify-between items-center mb-4 border-b border-[#1E2D45] pb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-[#0DD9B0]/10 rounded-lg text-[#0DD9B0]"><CheckCircle size={20} /></div>
+                              <div>
+                                <h3 className="font-bold text-white tracking-widest text-sm uppercase">E-Way Bill API</h3>
+                                <p className="text-[10px] text-[#6B7FA8] uppercase tracking-wider">Gov. GST Portal Connection</p>
+                              </div>
+                            </div>
+                            <button onClick={() => setAppSettings({...appSettings, integrations: {...appSettings.integrations, ewayBill: !appSettings.integrations.ewayBill}})} className={`w-12 h-6 rounded-full relative transition-[background-color] ${appSettings.integrations?.ewayBill ? 'bg-[#0DD9B0]' : 'bg-[#1E2D45]'}`}>
+                              <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${appSettings.integrations?.ewayBill ? 'left-7' : 'left-1'}`}></div>
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#6B7FA8] leading-relaxed mb-4">When enabled, guard can enter e-way bill number and system auto-fetches challan data from government GST portal mock API.</p>
+                          <button onClick={handleSaveIntegrations} className="mt-auto px-4 py-2 border border-[#0DD9B0]/50 text-[#0DD9B0] hover:bg-[#0DD9B0]/10 text-[10px] font-bold tracking-widest uppercase rounded w-full">Save Config</button>
+                        </div>
+  
+                        {/* Tally Integration */}
+                        <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden flex flex-col items-start p-6">
+                          <div className="flex w-full justify-between items-center mb-4 border-b border-[#1E2D45] pb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-[#38BDF8]/10 rounded-lg text-[#38BDF8]"><Database size={20} /></div>
+                              <div>
+                                <h3 className="font-bold text-white tracking-widest text-sm uppercase">Tally Integration</h3>
+                                <p className="text-[10px] text-[#6B7FA8] uppercase tracking-wider">Automated ERP Syncer</p>
+                              </div>
+                            </div>
+                            <button onClick={() => setAppSettings({...appSettings, integrations: {...appSettings.integrations, tally: !appSettings.integrations.tally}})} className={`w-12 h-6 rounded-full relative transition-[background-color] ${appSettings.integrations?.tally ? 'bg-[#38BDF8]' : 'bg-[#1E2D45]'}`}>
+                              <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${appSettings.integrations?.tally ? 'left-7' : 'left-1'}`}></div>
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#6B7FA8] leading-relaxed mb-4">When enabled, approved entries automatically sync to Tally via webhook.</p>
+                          {appSettings.integrations?.tally && (
+                            <input value={appSettings.integrations?.tallyWebhook || ''} onChange={(e) => setAppSettings({...appSettings, integrations: {...appSettings.integrations, tallyWebhook: e.target.value}})} placeholder="https://your-tally-api.com/webhook" className="w-full bg-[#0D1421] border border-[#1E2D45] rounded p-2 text-sm text-white mb-4 focus:border-[#38BDF8] outline-none" />
+                          )}
+                          <button onClick={handleSaveIntegrations} className="mt-auto px-4 py-2 border border-[#38BDF8]/50 text-[#38BDF8] hover:bg-[#38BDF8]/10 text-[10px] font-bold tracking-widest uppercase rounded w-full">Save Config</button>
+                        </div>
+  
+                        {/* FASTag Vehicle Lookup */}
+                        <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden flex flex-col items-start p-6">
+                          <div className="flex w-full justify-between items-center mb-4 border-b border-[#1E2D45] pb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-[#F59E0B]/10 rounded-lg text-[#F59E0B]"><Truck size={20} /></div>
+                              <div>
+                                <h3 className="font-bold text-white tracking-widest text-sm uppercase">FASTag Lookup</h3>
+                                <p className="text-[10px] text-[#6B7FA8] uppercase tracking-wider">VAHAN Transport DB</p>
+                              </div>
+                            </div>
+                            <button onClick={() => setAppSettings({...appSettings, integrations: {...appSettings.integrations, fastag: !appSettings.integrations.fastag}})} className={`w-12 h-6 rounded-full relative transition-[background-color] ${appSettings.integrations?.fastag ? 'bg-[#F59E0B]' : 'bg-[#1E2D45]'}`}>
+                              <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${appSettings.integrations?.fastag ? 'left-7' : 'left-1'}`}></div>
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#6B7FA8] leading-relaxed mb-4">When enabled, guard enters plate number and system fetches vehicle registration details automatically.</p>
+                          <button onClick={handleSaveIntegrations} className="mt-auto px-4 py-2 border border-[#F59E0B]/50 text-[#F59E0B] hover:bg-[#F59E0B]/10 text-[10px] font-bold tracking-widest uppercase rounded w-full">Save Config</button>
+                        </div>
+  
+                        {/* WhatsApp Alerts */}
+                        <div className="bg-[#111827] border border-[#1E2D45] rounded-xl overflow-hidden flex flex-col items-start p-6">
+                          <div className="flex w-full justify-between items-center mb-4 border-b border-[#1E2D45] pb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-[#F43F5E]/10 rounded-lg text-[#F43F5E]"><AlertTriangle size={20} /></div>
+                              <div>
+                                <h3 className="font-bold text-white tracking-widest text-sm uppercase">WhatsApp Alerts</h3>
+                                <p className="text-[10px] text-[#6B7FA8] uppercase tracking-wider">Twilio Messaging Agent</p>
+                              </div>
+                            </div>
+                            <button onClick={() => setAppSettings({...appSettings, integrations: {...appSettings.integrations, whatsappAlerts: !appSettings.integrations.whatsappAlerts}})} className={`w-12 h-6 rounded-full relative transition-[background-color] ${appSettings.integrations?.whatsappAlerts ? 'bg-[#F43F5E]' : 'bg-[#1E2D45]'}`}>
+                              <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${appSettings.integrations?.whatsappAlerts ? 'left-7' : 'left-1'}`}></div>
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#6B7FA8] leading-relaxed mb-4">When enabled, manager receives WhatsApp message via Twilio API when a MISMATCH is flagged.</p>
+                          {appSettings.integrations?.whatsappAlerts && (
+                            <input value={appSettings.integrations?.whatsappNumber || ''} onChange={(e) => setAppSettings({...appSettings, integrations: {...appSettings.integrations, whatsappNumber: e.target.value}})} placeholder="+91 9999999999" className="w-full bg-[#0D1421] border border-[#1E2D45] rounded p-2 text-sm text-white mb-4 focus:border-[#F43F5E] outline-none" />
+                          )}
+                          <button onClick={handleSaveIntegrations} className="mt-auto px-4 py-2 border border-[#F43F5E]/50 text-[#F43F5E] hover:bg-[#F43F5E]/10 text-[10px] font-bold tracking-widest uppercase rounded w-full">Save Config</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
             </>

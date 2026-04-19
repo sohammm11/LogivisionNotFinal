@@ -34,6 +34,14 @@ const settingsSchema = new mongoose.Schema({
     smsMismatch: { type: Boolean, default: false },
     autoFlagEmptyVibe: { type: Boolean, default: true },
     requireRejectionReason: { type: Boolean, default: true }
+  },
+  integrations: {
+    ewayBill: { type: Boolean, default: false },
+    tally: { type: Boolean, default: false },
+    tallyWebhook: { type: String, default: '' },
+    fastag: { type: Boolean, default: false },
+    whatsappAlerts: { type: Boolean, default: false },
+    whatsappNumber: { type: String, default: '' }
   }
 }, {
   timestamps: true

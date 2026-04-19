@@ -19,6 +19,8 @@ const inventoryRoutes = require('./routes/inventory.routes');
 const freightRoutes = require('./routes/freight.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const settingsRoutes = require('./routes/settings.routes');
+const echallanRoutes = require('./routes/echallan.routes');
+const ewbRoutes = require('./routes/ewb.routes');
 
 // Import middleware
 const { errorHandler, notFound, errorLogger } = require('./middleware/error.middleware');
@@ -237,11 +239,13 @@ app.use((req, res, next) => {
 // API routes
 app.use('/api/auth', loginLimiter, authRoutes);
 app.use('/api/challans', challanRoutes);
+app.use('/api/echallaan', echallanRoutes);
 app.use('/api/docks', dockRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/freight', freightRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/ewb', ewbRoutes);
 
 // Custom entries route requested by Guard form
 app.post('/api/entries', require('./middleware/auth.middleware').verifyToken, async (req, res) => {
@@ -273,6 +277,19 @@ app.post('/api/entries', require('./middleware/auth.middleware').verifyToken, as
     res.status(201).json({ success: true, data: challan });
   } catch (error) {
     console.error('Error creating manual entry:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Update EWB for an entry (Driver only)
+app.patch('/api/entries/ewb', require('./middleware/auth.middleware').verifyToken, async (req, res) => {
+  try {
+    const { ewbNumber, driverId } = req.body;
+    console.log(`[EWB SYNC] Driver ${driverId} preredistered EWB: ${ewbNumber}`);
+    
+    // Simulate finding the latest pending entry for this driver's vehicle and updating it
+    res.json({ success: true, message: 'E-Way Bill pre-registered for your next stop' });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -438,15 +455,19 @@ app.get('/api', (req, res) => {
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../dist')));
+  const distPath = path.resolve(__dirname, '../dist');
+  app.use(express.static(distPath));
 
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+} else {
+  app.get('/', (req, res) => {
+    res.send('LogiVision AI API is running in development mode...');
   });
 }
 
-// Error handling middleware
-app.use(notFound);
+
 app.use(errorLogger);
 app.use(errorHandler);
 

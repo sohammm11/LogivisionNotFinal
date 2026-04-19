@@ -77,6 +77,10 @@ const userSchema = new mongoose.Schema({
   preferred_routes: {
     type: String,
     trim: true
+  },
+  isGoLive: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
@@ -119,6 +123,7 @@ userSchema.methods.toPublicJSON = function() {
     vehicle_type: this.vehicle_type,
     capacity_tonnes: this.capacity_tonnes,
     preferred_routes: this.preferred_routes,
+    isGoLive: this.isGoLive,
     createdAt: this.createdAt
   };
 };

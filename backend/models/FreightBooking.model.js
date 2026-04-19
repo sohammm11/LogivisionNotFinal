@@ -9,17 +9,26 @@ const freightBookingSchema = new mongoose.Schema({
   },
   truckId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Truck',
-    required: true
+    ref: 'Truck'
   },
   driverId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    ref: 'User'
   },
   warehouseId: {
     type: String,
     required: true
+  },
+  // Zero-Overbooking: link to a specific inventory item
+  inventoryId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'InventoryItem',
+    default: null
+  },
+  requiredStock: {
+    type: Number,
+    min: 0,
+    default: 0
   },
   cargoDescription: {
     type: String,
@@ -49,8 +58,8 @@ const freightBookingSchema = new mongoose.Schema({
   status: {
     type: String,
     required: true,
-    enum: ['PENDING', 'ACCEPTED', 'IN_TRANSIT', 'COMPLETED', 'REJECTED', 'CANCELLED'],
-    default: 'PENDING'
+    enum: ['SEARCHING FOR DRIVER', 'DRIVER ASSIGNED', 'IN_TRANSIT', 'COMPLETED', 'REJECTED', 'CANCELLED'],
+    default: 'SEARCHING FOR DRIVER'
   },
   bookedAt: {
     type: Date,
@@ -95,7 +104,7 @@ const freightBookingSchema = new mongoose.Schema({
   },
   cargoType: {
     type: String,
-    enum: ['GENERAL', 'PERISHABLE', 'HAZMAT', 'FRAGILE', 'OVERSIZED', 'TEMPERATURE_CONTROLLED'],
+    enum: ['Electronics', 'FMCG', 'Auto Parts', 'Pharma', 'Steel', 'Textiles', 'GENERAL'],
     default: 'GENERAL'
   },
   specialRequirements: [{

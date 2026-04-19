@@ -58,4 +58,23 @@ router.patch('/notifications', verifyToken, authorizeRoles('ADMIN'), asyncHandle
   res.json({ success: true, data: settings });
 }));
 
+// PATCH integrations settings
+router.patch('/integrations', verifyToken, authorizeRoles('ADMIN'), asyncHandler(async (req, res) => {
+  let settings = await Settings.findOne();
+  if (!settings) settings = new Settings();
+
+  const { ewayBill, tally, tallyWebhook, fastag, whatsappAlerts, whatsappNumber } = req.body;
+  
+  if (!settings.integrations) settings.integrations = {};
+  if (ewayBill !== undefined) settings.integrations.ewayBill = ewayBill;
+  if (tally !== undefined) settings.integrations.tally = tally;
+  if (tallyWebhook !== undefined) settings.integrations.tallyWebhook = tallyWebhook;
+  if (fastag !== undefined) settings.integrations.fastag = fastag;
+  if (whatsappAlerts !== undefined) settings.integrations.whatsappAlerts = whatsappAlerts;
+  if (whatsappNumber !== undefined) settings.integrations.whatsappNumber = whatsappNumber;
+
+  await settings.save();
+  res.json({ success: true, data: settings });
+}));
+
 module.exports = router;

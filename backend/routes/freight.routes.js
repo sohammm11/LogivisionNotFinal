@@ -2,8 +2,10 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const FreightBooking = require('../models/FreightBooking.model');
 const Truck = require('../models/Truck.model');
+const InventoryItem = require('../models/InventoryItem.model');
 const { verifyToken, authorizeRoles } = require('../middleware/auth.middleware');
 const { asyncHandler, AppError, validationError } = require('../middleware/error.middleware');
+const { checkStockAvailability, commitStockAllocation, rollbackStockAllocation } = require('../middleware/stockCheck.middleware');
 
 const router = express.Router();
 
@@ -238,166 +240,105 @@ router.get('/market/stats', verifyToken, authorizeRoles('DRIVER'), asyncHandler(
 }));
 
 // Create new freight booking (WAREHOUSE_MANAGER only)
+// checkStockAvailability runs BEFORE the route handler — atomically holds stock
 router.post('/bookings', verifyToken, authorizeRoles('WAREHOUSE_MANAGER'), [
-  body('truckId')
-    .notEmpty()
-    .withMessage('Truck ID is required')
-    .isMongoId()
-    .withMessage('Invalid truck ID'),
-
-  body('driverId')
-    .notEmpty()
-    .withMessage('Driver ID is required')
-    .isMongoId()
-    .withMessage('Invalid driver ID'),
-
-  body('warehouseId')
-    .trim()
-    .notEmpty()
-    .withMessage('Warehouse ID is required'),
-
-  body('cargoDescription')
-    .trim()
-    .notEmpty()
-    .withMessage('Cargo description is required')
-    .isLength({ min: 10, max: 500 })
-    .withMessage('Cargo description must be between 10 and 500 characters'),
-
-  body('weightKg')
-    .isNumeric()
-    .withMessage('Weight must be a number')
-    .isFloat({ min: 0.1 })
-    .withMessage('Weight must be greater than 0'),
-
-  body('distanceKm')
-    .isNumeric()
-    .withMessage('Distance must be a number')
-    .isFloat({ min: 0.1 })
-    .withMessage('Distance must be greater than 0'),
-
-  body('pricePerKm')
-    .isNumeric()
-    .withMessage('Price per km must be a number')
-    .isFloat({ min: 0 })
-    .withMessage('Price per km must be positive'),
-
-  body('pickupAddress.street')
-    .trim()
-    .notEmpty()
-    .withMessage('Pickup street address is required'),
-
-  body('pickupAddress.city')
-    .trim()
-    .notEmpty()
-    .withMessage('Pickup city is required'),
-
-  body('pickupAddress.state')
-    .trim()
-    .notEmpty()
-    .withMessage('Pickup state is required'),
-
-  body('pickupAddress.pincode')
-    .trim()
-    .notEmpty()
-    .withMessage('Pickup pincode is required'),
-
-  body('deliveryAddress.street')
-    .trim()
-    .notEmpty()
-    .withMessage('Delivery street address is required'),
-
-  body('deliveryAddress.city')
-    .trim()
-    .notEmpty()
-    .withMessage('Delivery city is required'),
-
-  body('deliveryAddress.state')
-    .trim()
-    .notEmpty()
-    .withMessage('Delivery state is required'),
-
-  body('deliveryAddress.pincode')
-    .trim()
-    .notEmpty()
-    .withMessage('Delivery pincode is required'),
-
-  body('priority')
-    .optional()
-    .isIn(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
-    .withMessage('Invalid priority'),
-
-  body('cargoType')
-    .optional()
-    .isIn(['GENERAL', 'PERISHABLE', 'HAZMAT', 'FRAGILE', 'OVERSIZED', 'TEMPERATURE_CONTROLLED'])
-    .withMessage('Invalid cargo type')
-], asyncHandler(async (req, res) => {
-  // Check for validation errors
+  body('truckId').notEmpty().withMessage('Truck ID is required').isMongoId().withMessage('Invalid truck ID'),
+  body('driverId').notEmpty().withMessage('Driver ID is required').isMongoId().withMessage('Invalid driver ID'),
+  body('warehouseId').trim().notEmpty().withMessage('Warehouse ID is required'),
+  body('cargoDescription').trim().notEmpty().withMessage('Cargo description is required').isLength({ min: 10, max: 500 }).withMessage('Cargo description must be between 10 and 500 characters'),
+  body('weightKg').isNumeric().withMessage('Weight must be a number').isFloat({ min: 0.1 }).withMessage('Weight must be greater than 0'),
+  body('distanceKm').isNumeric().withMessage('Distance must be a number').isFloat({ min: 0.1 }).withMessage('Distance must be greater than 0'),
+  body('pricePerKm').isNumeric().withMessage('Price per km must be a number').isFloat({ min: 0 }).withMessage('Price per km must be positive'),
+  body('pickupAddress.street').trim().notEmpty().withMessage('Pickup street address is required'),
+  body('pickupAddress.city').trim().notEmpty().withMessage('Pickup city is required'),
+  body('pickupAddress.state').trim().notEmpty().withMessage('Pickup state is required'),
+  body('pickupAddress.pincode').trim().notEmpty().withMessage('Pickup pincode is required'),
+  body('deliveryAddress.street').trim().notEmpty().withMessage('Delivery street address is required'),
+  body('deliveryAddress.city').trim().notEmpty().withMessage('Delivery city is required'),
+  body('deliveryAddress.state').trim().notEmpty().withMessage('Delivery state is required'),
+  body('deliveryAddress.pincode').trim().notEmpty().withMessage('Delivery pincode is required'),
+  body('priority').optional().isIn(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).withMessage('Invalid priority'),
+  body('cargoType').optional().isIn(['GENERAL', 'PERISHABLE', 'HAZMAT', 'FRAGILE', 'OVERSIZED', 'TEMPERATURE_CONTROLLED']).withMessage('Invalid cargo type')
+],
+  // ⚡ Zero-Overbooking gate — atomic stock lock BEFORE booking save
+  checkStockAvailability,
+  asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    await rollbackStockAllocation(req);
     throw validationError(errors.array());
   }
 
-  const bookingData = {
-    ...req.body,
-    createdBy: req.user._id
-  };
+  const bookingData = { ...req.body, createdBy: req.user._id };
 
-  // Check warehouse access
+  // Attach inventoryId if passed from front-end
+  if (req.body.inventoryId) bookingData.inventoryId = req.body.inventoryId;
+  if (req.body.requiredStock) bookingData.requiredStock = parseFloat(req.body.requiredStock);
+
   if (req.user.role !== 'ADMIN' && req.user.warehouseId !== bookingData.warehouseId) {
+    await rollbackStockAllocation(req);
     throw new AppError('Access denied. You can only access your assigned warehouse.', 403);
   }
 
-  // Verify truck exists and is available
   const truck = await Truck.findById(bookingData.truckId);
-  if (!truck) {
-    throw new AppError('Truck not found', 404);
-  }
+  if (!truck) { await rollbackStockAllocation(req); throw new AppError('Truck not found', 404); }
+  if (!truck.isAvailable) { await rollbackStockAllocation(req); throw new AppError('Truck is not available for booking', 400); }
 
-  if (!truck.isAvailable) {
-    throw new AppError('Truck is not available for booking', 400);
-  }
-
-  // Check if truck can carry the weight
   const availableWeight = truck.totalCapacityKg - truck.currentLoadKg;
   if (!truck.canCarryLoad(bookingData.weightKg)) {
+    await rollbackStockAllocation(req);
     throw new AppError(`Truck capacity exceeded. Available: ${availableWeight}kg, Required: ${bookingData.weightKg}kg`, 400);
   }
 
-  // Calculate total cost
-  const totalCost = bookingData.distanceKm * bookingData.pricePerKm;
-  bookingData.totalCost = totalCost;
+  bookingData.totalCost = bookingData.distanceKm * bookingData.pricePerKm;
 
-  // Create booking
-  const booking = new FreightBooking(bookingData);
-  await booking.save();
+  let booking;
+  try {
+    booking = new FreightBooking(bookingData);
+    await booking.save();
+    // ✅ Stock allocation is now permanent
+    await commitStockAllocation(req);
+  } catch (saveErr) {
+    // 🔴 Booking failed — roll back the inventory hold
+    await rollbackStockAllocation(req);
+    throw saveErr;
+  }
 
-  // Update truck status
   truck.currentStatus = 'AT_GATE';
   truck.assignedWarehouse = bookingData.warehouseId;
   truck.currentDestination = `${bookingData.deliveryAddress.city}, ${bookingData.deliveryAddress.state}`;
   await truck.save();
 
-  // Emit freight available event
-  req.io.emit('freight:available', {
-    booking: await FreightBooking.findById(booking._id)
-      .populate('truckId', 'regNo make model totalCapacityKg')
-      .populate('driverId', 'name email phone')
-      .populate('createdBy', 'name email'),
-    warehouseId: bookingData.warehouseId,
-    timestamp: new Date()
-  });
+  const populatedBooking = await FreightBooking.findById(booking._id)
+    .populate('truckId', 'regNo make model totalCapacityKg')
+    .populate('driverId', 'name email phone')
+    .populate('createdBy', 'name email')
+    .populate('inventoryId', 'name sku currentQty reservedQty allocatedQty unit marketplaceVisible');
+
+  req.io.emit('freight:available', { booking: populatedBooking, warehouseId: bookingData.warehouseId, timestamp: new Date() });
+
+  // 📡 Broadcast real-time stock update to all drivers in marketplace
+  if (req._inventoryItem) {
+    const freshItem = await InventoryItem.findById(req._inventoryItem._id);
+    req.io.emit('inventory_update', {
+      inventoryId: freshItem._id,
+      sku: freshItem.sku,
+      name: freshItem.name,
+      available: freshItem.currentQty - freshItem.reservedQty - freshItem.allocatedQty,
+      status: freshItem.status,
+      marketplaceVisible: freshItem.marketplaceVisible,
+      warehouseId: freshItem.warehouseId,
+      timestamp: new Date()
+    });
+  }
 
   res.status(201).json({
     success: true,
     message: 'Freight booking created successfully',
-    data: {
-      booking: await FreightBooking.findById(booking._id)
-        .populate('truckId', 'regNo make model totalCapacityKg')
-        .populate('driverId', 'name email phone')
-        .populate('createdBy', 'name email')
-    }
+    data: { booking: populatedBooking }
   });
 }));
+
 
 // Accept booking (DRIVER only)
 router.patch('/bookings/:id/accept', verifyToken, authorizeRoles('DRIVER'), [
@@ -843,6 +784,147 @@ router.get('/stats/warehouse', verifyToken, asyncHandler(async (req, res) => {
       statusBreakdown: stats
     }
   });
+}));
+
+// --- FREIGHT MARKETPLACE LOGIC ---
+
+// Manager posts a new load
+router.post('/loads', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN'), asyncHandler(async (req, res) => {
+  const { fromLocation, toLocation, cargoType, weightTonnes, ratePerKm, pickupDateTime, notes } = req.body;
+  
+  // Create a new booking with status SEARCHING FOR DRIVER
+  const load = new FreightBooking({
+    warehouseId: req.user.warehouseId,
+    cargoDescription: notes || `${cargoType} Shipment`,
+    weightKg: weightTonnes * 1000,
+    distanceKm: 120, // Mock distance for calculation
+    pricePerKm: ratePerKm,
+    totalCost: 120 * ratePerKm,
+    status: 'SEARCHING FOR DRIVER',
+    cargoType: cargoType,
+    pickupAddress: { city: fromLocation },
+    deliveryAddress: { city: toLocation },
+    notes: notes,
+    pickupDate: pickupDateTime,
+    createdBy: req.user._id
+  });
+
+  await load.save();
+
+  // Socket event to all matching online drivers
+  req.io.emit('load:posted', load);
+
+  res.status(201).json({ success: true, data: load });
+}));
+
+// Driver gets available matching loads
+router.get('/loads', verifyToken, authorizeRoles('DRIVER'), asyncHandler(async (req, res) => {
+  const driver = req.user;
+  
+  // Check if driver is LIVE
+  if (!driver.isGoLive) {
+    return res.json({ success: true, message: 'Go Live to see available loads', data: [] });
+  }
+
+  // Matching logic
+  const query = {
+    status: 'SEARCHING FOR DRIVER',
+    weightKg: { $lte: (driver.capacity_tonnes || 0) * 1000 }
+  };
+
+  // Filter by preferred routes keywords if specified
+  if (driver.preferred_routes && driver.preferred_routes.trim().length > 0) {
+    const keywords = driver.preferred_routes.split(',').map(s => s.trim().toLowerCase());
+    const keywordRegex = keywords.map(k => new RegExp(k, 'i'));
+    
+    query.$or = [
+      { 'pickupAddress.city': { $in: keywordRegex } },
+      { 'deliveryAddress.city': { $in: keywordRegex } }
+    ];
+  }
+
+  const loads = await FreightBooking.find(query).sort({ createdAt: -1 });
+  
+  res.json({
+    success: true,
+    data: loads
+  });
+}));
+
+// Manager gets all loads posted by their warehouse
+router.get('/marketplace/loads', verifyToken, authorizeRoles('WAREHOUSE_MANAGER', 'ADMIN'), asyncHandler(async (req, res) => {
+  const query = { warehouseId: req.user.warehouseId };
+  if (req.user.role === 'ADMIN' && req.query.warehouseId) {
+    query.warehouseId = req.query.warehouseId;
+  }
+
+  const loads = await FreightBooking.find(query)
+    .populate('driverId', 'name phone')
+    .sort({ createdAt: -1 });
+
+  res.json({
+    success: true,
+    data: loads
+  });
+}));
+
+// Driver accepts a load
+router.patch('/loads/:id/accept', verifyToken, authorizeRoles('DRIVER'), asyncHandler(async (req, res) => {
+  const load = await FreightBooking.findById(req.params.id);
+  
+  if (!load) {
+    throw new AppError('Load not found', 404);
+  }
+
+  if (load.status !== 'SEARCHING FOR DRIVER') {
+    throw new AppError('This load has already been picked up by another driver.', 400);
+  }
+
+  // Assign driver and update status
+  load.driverId = req.user._id;
+  load.status = 'DRIVER ASSIGNED';
+  load.acceptedAt = new Date();
+  
+  await load.save();
+
+  // Notify manager
+  req.io.emit('load:accepted', {
+    loadId: load._id,
+    bookingId: load.bookingId,
+    driverName: req.user.name,
+    status: load.status
+  });
+
+  res.json({
+    success: true,
+    message: 'Load accepted successfully! Head to pickup location.',
+    data: load
+  });
+}));
+
+// Manager or Driver cancels a load
+router.patch('/loads/:id/cancel', verifyToken, asyncHandler(async (req, res) => {
+  const load = await FreightBooking.findById(req.params.id);
+  
+  if (!load) {
+    throw new AppError('Load not found', 404);
+  }
+
+  // Check permissions: Manager who created it or Driver assigned to it
+  const isManager = ['WAREHOUSE_MANAGER', 'ADMIN'].includes(req.user.role);
+  const isAssignedDriver = load.driverId?.toString() === req.user._id.toString();
+
+  if (!isManager && !isAssignedDriver) {
+    throw new AppError('You do not have permission to cancel this load', 403);
+  }
+
+  load.status = 'CANCELLED';
+  load.notes = `Cancelled by ${req.user.name}: ${req.body.reason || 'No reason provided'}`;
+  await load.save();
+
+  req.io.emit('load:cancelled', { loadId: load._id, cancelledBy: req.user.name });
+
+  res.json({ success: true, message: 'Load cancelled successfully' });
 }));
 
 module.exports = router;

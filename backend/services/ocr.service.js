@@ -40,44 +40,50 @@ const extractJson = (text) => {
 
 // ─── Main: processChallanImage (SUPER ROBUST VERSION) ─────────────────────────
 const processChallanImage = async (imageSource) => {
-  console.log('[DEBUG] Hard-Fix OCR initiated');
+  console.log('[DEBUG] Neural Multi-Language OCR initiated');
   const { mimeType, base64Data } = parseImageSource(imageSource);
   
   if (!base64Data) throw new Error('Invalid image data');
 
-  log(`[Gemini-HardFix] Processing. MIME: ${mimeType}, Size: ${base64Data.length}`);
+  log(`[Gemini-Neural] Processing. MIME: ${mimeType}, Size: ${base64Data.length}`);
 
-  // Use the most stable commercial model for handwritten docs
-  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-  const prompt = `You are a professional logistics data extractor. 
-  ANALYZE THIS HANDWRITTEN INDIAN CHALLAN IMAGE.
-  The text is in English and Hindi/Marathi (Devanagari).
-  
-  EXTRACT THESE BOLD FIELDS:
-  1. Challan ID (usually starts with CLN)
-  2. Truck number (registration plate number)
-  3. From (Sender name)
-  4. To (Receiver/Destination)
-  5. Goods Description (Items/Cargo)
-  6. Weight (Total weight in Tons/Kg)
-  7. Total value (Amount)
-  8. Capacity (Full/Half/Empty)
-  
-  OUTPUT REQUIREMENT:
-  Return ONLY a valid JSON object. No markdown. No comments. No conversational filler.
-  JSON Schema:
-  {
-    "challan_number": "string or null",
-    "truck_number": "string or null",
-    "from": "string or null",
-    "to": "string or null",
-    "goods_description": "string or null",
-    "weight": "string or null",
-    "total_value": "string or null",
-    "capacity": "string or null",
-    "date": "string or null"
-  }`;
+  const prompt = `You are an expert at reading logistics delivery challans, gate passes, and invoices. 
+These documents can be professionally printed (digital) or handwritten, and may be in English, Hindi, Marathi, or mixed.
+
+Your task is to extract the following 9 fields from the provided image. Use your understanding of logistics terminology and document layouts to find the values even if they have slightly different labels or are positioned unexpectedly.
+
+Fields to extract:
+1. challan_number: Look for "Challan No", "DC No", "Bill No", "पावती क्र", "बिल नं", etc.
+2. date: Look for "Date", "Dt", "दिनांक", or a date string in DD-MM-YYYY or common formats.
+3. from: The sender/consignor company name or location.
+4. to: The receiver/consignee/destination "Bill To" or "Ship To" name or location.
+5. goods_description: Summary of items listed (e.g. "Flare Kurti, Skirts", "Industrial Gear").
+6. weight: Look for "Weight", "WT", "Qty" (if weight), "Tonnes", "KG", "टन", etc.
+7. total_value: Look for "Total", "Grand Total", "Amount", "Value", "रुपये", or numbers near currency symbols.
+8. capacity: Look for "Load", "Capacity", "Full/Half/Empty", "क्षमता".
+9. truck_number: Indian vehicle registration (e.g. MH12AB1234, RJ14CP0092).
+
+Rules:
+- Return ONLY a raw JSON object with NO markdown, NO backticks, NO text.
+- Use null for fields effectively missing.
+- Translate Hindi/Marathi values to English for the final JSON.
+- For truck_number, normalize to uppercase with no spaces.
+- For weight and value, include the units/prefix if visible (e.g. "14 Tons", "Rs. 497").
+
+JSON Format:
+{
+  "challan_number": null,
+  "date": null,
+  "from": null,
+  "to": null,
+  "goods_description": null,
+  "weight": null,
+  "total_value": null,
+  "capacity": null,
+  "truck_number": null
+}`;
 
   try {
     const result = await model.generateContent([
@@ -86,24 +92,45 @@ const processChallanImage = async (imageSource) => {
     ]);
 
     const text = (await result.response).text();
-    log(`[Gemini-HardFix] RAW RESULT:\n${text}`);
+    log(`[Gemini-Neural] RAW RESULT:\n${text}`);
 
     let parsed = extractJson(text);
     
-    // IF PARSING FAILED, TRY A LAST-GASP REGEX FOR THE TRUCK NUMBER
-    if (!parsed || !parsed.truck_number) {
-       log(`[Gemini-HardFix] Standard JSON failed or truck number missing. Running Regex Safety Net.`);
-       const truckMatch = text.match(/[A-Z]{2}\s?[0-9]{2}\s?[A-Z]{0,2}\s?[0-9]{4}/i);
-       if (!parsed) parsed = {};
-       if (truckMatch) parsed.truck_number = truckMatch[0].toUpperCase();
+    if (!parsed) {
+        log(`[Gemini-Neural] JSON extraction failed.`);
+        return { 
+          challan_number: null, date: null, from: null, to: null, 
+          goods_description: null, weight: null, total_value: null, 
+          capacity: null, truck_number: null, scan_confidence: 'low' 
+        };
     }
 
-    log(`[Gemini-HardFix] FINAL OUTPUT: ${JSON.stringify(parsed)}`);
+    // Confidence Scoring
+    const fields = ['challan_number', 'date', 'from', 'to', 'goods_description', 'weight', 'total_value', 'capacity', 'truck_number'];
+    const populatedCount = fields.filter(f => parsed[f] !== null && parsed[f] !== undefined && parsed[f] !== 'null' && parsed[f] !== '').length;
+    
+    let confidence = 'low';
+    if (populatedCount >= 6) confidence = 'high';
+    else if (populatedCount >= 4) confidence = 'medium';
+
+    parsed.scan_confidence = confidence;
+
+    // Fallback for truck_number
+    if (!parsed.truck_number) {
+       const truckMatch = text.match(/[A-Z]{2}\s?[0-9]{2}\s?[A-Z]{0,2}\s?[0-9]{4}/i);
+       if (truckMatch) parsed.truck_number = truckMatch[0].toUpperCase().replace(/\s/g, '');
+    }
+
+    log(`[Gemini-Neural] FINAL OUTPUT (Confidence: ${confidence}): ${JSON.stringify(parsed)}`);
     return parsed;
 
   } catch (err) {
-    log(`[Gemini-HardFix] FATAL ERROR: ${err.message}`);
-    return { challan_number: null, truck_number: null, from: null, to: null, goods_description: null, weight: null, total_value: null, capacity: null, date: null };
+    log(`[Gemini-Neural] FATAL ERROR: ${err.message}`);
+    return { 
+      challan_number: null, date: null, from: null, to: null, 
+      goods_description: null, weight: null, total_value: null, 
+      capacity: null, truck_number: null, scan_confidence: 'low' 
+    };
   }
 };
 

@@ -36,27 +36,67 @@ export const SocketProvider = ({ children }) => {
       setIsConnected(false);
     });
 
+    // Fetch initial feed and mismatches
+    const fetchInitialData = async () => {
+      try {
+        const userData = JSON.parse(localStorage.getItem('logivision_user') || '{}');
+        const warehouseId = userData.warehouseId;
+        if (!warehouseId) return;
+
+        const response = await fetch(`/api/challans?warehouseId=${warehouseId}&limit=50`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const json = await response.json();
+        if (json.success) {
+          setFeed(json.data.challans);
+          setMismatches(json.data.challans.filter(c => c.status === 'MISMATCH' || c.status === 'FLAGGED'));
+        }
+      } catch (err) {
+        console.error('Initial data fetch failed', err);
+      }
+    };
+    fetchInitialData();
+
     // Listen for real-time events
     newSocket.on('challan:scanned', (data) => {
-      setFeed(prev => [data.challan, ...prev].slice(0, 50));
+      setFeed(prev => {
+        const exists = prev.some(f => (f.challanId || f._id) === (data.challan.challanId || data.challan._id));
+        if (exists) return prev;
+        return [data.challan, ...prev].slice(0, 50);
+      });
       if (data.challan.status === 'MISMATCH' || data.challan.status === 'FLAGGED') {
-        setMismatches(prev => [data.challan, ...prev]);
+        setMismatches(prev => {
+          const exists = prev.some(m => (m.challanId || m._id) === (data.challan.challanId || data.challan._id));
+          if (exists) return prev;
+          return [data.challan, ...prev];
+        });
       }
-      // Notify UI
       window.dispatchEvent(new CustomEvent('socket:challan:scanned', { detail: data.challan }));
     });
 
     newSocket.on('mismatch:flagged', (data) => {
-      setMismatches(prev => [data.challan, ...prev]);
+      setMismatches(prev => {
+        const exists = prev.some(m => (m.challanId || m._id) === (data.challan.challanId || data.challan._id));
+        if (exists) return prev;
+        return [data.challan, ...prev];
+      });
       window.dispatchEvent(new CustomEvent('socket:mismatch:flagged', { detail: data.challan }));
     });
 
     newSocket.on('challan:status:updated', (data) => {
-      setFeed(prev => prev.map(f => f.challanId === data.challan.challanId ? data.challan : f));
-      if (data.challan.status !== 'MISMATCH' && data.challan.status !== 'FLAGGED') {
-        setMismatches(prev => prev.filter(m => m.challanId !== data.challan.challanId));
+      const updated = data.challan;
+      setFeed(prev => prev.map(f => (f.challanId || f._id) === (updated.challanId || updated._id) ? updated : f));
+      
+      if (updated.status !== 'MISMATCH' && updated.status !== 'FLAGGED') {
+        setMismatches(prev => prev.filter(m => (m.challanId || m._id) !== (updated.challanId || updated._id)));
+      } else {
+        setMismatches(prev => {
+          const exists = prev.some(m => (m.challanId || m._id) === (updated.challanId || updated._id));
+          if (exists) return prev.map(m => (m.challanId || m._id) === (updated.challanId || updated._id) ? updated : m);
+          return [updated, ...prev];
+        });
       }
-      window.dispatchEvent(new CustomEvent('socket:mismatch:resolved', { detail: data.challan }));
+      window.dispatchEvent(new CustomEvent('socket:mismatch:resolved', { detail: updated }));
     });
 
     setSocket(newSocket);

@@ -158,11 +158,12 @@ router.post('/ocr', verifyToken, authorizeRoles('GUARD', 'AUTHORITY', 'ADMIN'), 
       vehicleNo:        rawExtracted.truck_number     || rawExtracted.vehicleNo         || null,
       vendorName:       rawExtracted.from             || rawExtracted.vendorName        || null,
       destination:      rawExtracted.to               || rawExtracted.destination       || null,
-      cargoDescription: rawExtracted.goods_description|| rawExtracted.cargoDescription  || null,
+      goodsDescription: rawExtracted.goods_description|| rawExtracted.cargoDescription || null,
       totalWeight:      rawExtracted.weight           || rawExtracted.totalWeight       || null,
-      value:            rawExtracted.total_value      || rawExtracted.value             || null,
+      totalValue:       rawExtracted.total_value      || rawExtracted.value             || null,
       declaredLoad:     rawExtracted.capacity         || rawExtracted.declaredLoad      || null,
       date:             rawExtracted.date             || null,
+      scan_confidence:  rawExtracted.scan_confidence  || 'low'
     };
 
     // Normalize declaredLoad to FULL / HALF / EMPTY
