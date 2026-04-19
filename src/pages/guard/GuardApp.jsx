@@ -960,20 +960,37 @@ const ScanTab = () => {
                 </div>
               </div>
             ) : (
+              <div className="space-y-4">
+                {/* Scan Challan Button */}
                 <button 
                   onClick={handleScanChallan} 
                   disabled={scanAnim === 'PARSING'}
-                  className="w-full bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-black h-32 rounded-[32px] flex items-center justify-center gap-4 shadow-2xl shadow-amber-900/40 active:scale-95 transition-all transform hover:-translate-y-1"
+                  className="w-full bg-[#111827] border-2 border-[#F59E0B]/40 rounded-[24px] p-8 flex flex-col items-center justify-center gap-4 active:scale-[0.97] transition-all group"
                 >
-                  <div className="bg-black/10 p-3.5 rounded-2xl">
-                    <Scan size={36} className="stroke-[2.5]" />
+                  <div className="w-20 h-20 rounded-full bg-[#F59E0B]/10 border border-[#F59E0B]/30 flex items-center justify-center group-active:bg-[#F59E0B]/20 transition-colors">
+                    <Camera size={36} className="text-[#F59E0B]" />
                   </div>
-                  <div className="text-left">
-                    <div className="text-[12px] font-black uppercase opacity-60 leading-none mb-1">Optical Neural Scan</div>
-                    <div className="text-xl font-black tracking-widest uppercase leading-none">Tap to Scan Challan</div>
-                    <div className="text-[9px] font-bold uppercase mt-2 text-black/40">Secure Gate Entry v2.0</div>
+                  <div className="text-center">
+                    <div className="text-lg font-black text-white uppercase tracking-widest">Scan Challan</div>
+                    <div className="text-[9px] font-bold text-[#6B7FA8] uppercase tracking-[0.2em] mt-1">Tap to Open Camera</div>
                   </div>
                 </button>
+
+                {/* Plate Scan Button */}
+                <button 
+                  onClick={handleScanPlate} 
+                  className={`w-full rounded-2xl p-4 flex items-center justify-center gap-3 active:scale-[0.97] transition-all ${
+                    plateDone 
+                      ? 'bg-[#0DD9B0]/10 border border-[#0DD9B0]/30' 
+                      : 'bg-[#0D1421] border border-[#1E2D45]'
+                  }`}
+                >
+                  <Camera size={18} className={plateDone ? 'text-[#0DD9B0]' : 'text-[#6B7FA8]'} />
+                  <span className={`text-[11px] font-black uppercase tracking-widest ${plateDone ? 'text-[#0DD9B0]' : 'text-[#6B7FA8]'}`}>
+                    {plateDone ? '✓ Plate Captured' : 'Scan Number Plate'}
+                  </span>
+                </button>
+              </div>
             )}
           </div>
 
